@@ -1,0 +1,197 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [master]
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: qmapshack-windows-master
+  cancel-in-progress: false
+
+env:
+  VCPKG_DEFAULT_TRIPLET: x64-windows
+  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-archives
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
+
+      # ------------------------------------------------------------------
+      # Routino (built with MinGW, as upstream does; see msvc_64/build_routino*.bat)
+      # Result layout expected by cmake/Modules/FindROUTINO.cmake:
+      #   routino/include/routino.h, routino/lib/routino.lib (+ .dll), routino/xml/*.xml
+      # ------------------------------------------------------------------
+      - name: Set up MSYS2 (for Routino)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make
+            subversion
+            mingw-w64-x86_64-toolchain
+
+      - name: Build Routino
+        shell: msys2 {0}
+        run: |
+          pwd
+          svn co http://routino.org/svn/trunk routino-src
+          cd routino-src
+          make
+          cd ..
+          mkdir -p routino/bin routino/lib routino/include routino/xml
+          cp routino-src/src/*.exe routino/bin/
+          cp routino-src/src/routino.dll routino-src/src/routino.lib routino/lib/
+          cp routino-src/src/routino.h routino/include/
+          cp routino-src/xml/tagging*.xml routino/xml/
+          cp routino-src/xml/routino-profiles.xml     routino/xml/profiles.xml
+          cp routino-src/xml/routino-tagging.xml      routino/xml/tagging.xml
+          cp routino-src/xml/routino-translations.xml routino/xml/translations.xml
+
+      # ------------------------------------------------------------------
+      # Toolchain: MSVC, Qt
+      # ------------------------------------------------------------------
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up compiler cache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          arch: win64_msvc2022_64
+          modules: qt5compat qtwebengine qtpositioning qtwebchannel
+          cache: true
+          cache-key-prefix: install-qt-v2
+
+      # ------------------------------------------------------------------
+      # GDAL, PROJ, libjpeg via vcpkg (slow the first time, then cached).
+      # The cache is saved even if a later step fails, so the long build is not lost.
+      # Bump the "v2" in the key whenever the package list changes.
+      # ------------------------------------------------------------------
+      - name: Restore vcpkg cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-${{ runner.os }}-gdal-proj-jpeg-v2
+
+      - name: Install GDAL, PROJ, libjpeg
+        run: |
+          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+          vcpkg install gdal proj libjpeg-turbo --triplet x64-windows
+
+      - name: Save vcpkg cache
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-${{ runner.os }}-gdal-proj-jpeg-v2
+
+      # ------------------------------------------------------------------
+      # Build QMapShack
+      # ------------------------------------------------------------------
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          -DVCPKG_TARGET_TRIPLET=x64-windows
+          -DROUTINO_DEV_PATH="$env:GITHUB_WORKSPACE/routino"
+
+      - name: Build
+        run: cmake --build build --target qmapshack --parallel
+
+      - name: Show compiler cache statistics
+        if: always()
+        run: sccache --show-stats
+
+      # ------------------------------------------------------------------
+      # Package using the directory layout expected by CAppSetupWin.
+      # ------------------------------------------------------------------
+      - name: Stage files
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+
+          $exe = Get-ChildItem build -Recurse -Filter qmapshack.exe | Select-Object -First 1
+          Copy-Item $exe.FullName dist\
+
+          # GDAL / PROJ / JPEG and their dependencies
+          $vcpkgRoot = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
+          Copy-Item "$vcpkgRoot\bin\*.dll" dist\
+          Copy-Item "$vcpkgRoot\share\proj" dist\share\proj -Recurse -Force
+          Copy-Item "$vcpkgRoot\share\gdal" dist\data -Recurse -Force
+          if (Test-Path "$vcpkgRoot\bin\gdalplugins") {
+            Copy-Item "$vcpkgRoot\bin\gdalplugins" dist\gdalplugins -Recurse -Force
+          }
+
+          # Routino
+          Copy-Item routino\lib\routino.dll dist\
+          Copy-Item routino\xml dist\routino-xml -Recurse -Force
+
+          # MinGW runtime DLLs that routino.dll may need
+          foreach ($n in 'libgcc_s_seh-1.dll', 'libwinpthread-1.dll') {
+            $p = "C:\msys64\mingw64\bin\$n"
+            if (Test-Path $p) { Copy-Item $p dist\ }
+          }
+
+          # Qt DLLs, plugins and WebEngine (run last so Qt's own DLLs win)
+          windeployqt --release --no-translations --compiler-runtime dist\qmapshack.exe
+
+          Get-ChildItem dist | Select-Object Name, Length
+
+      - name: Install NSIS
+        run: choco install nsis --yes --no-progress
+
+      - name: Resolve installer filename
+        id: installer-name
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $version = $env:RELEASE_TAG
+          if (-not $version) {
+            $project = Select-String -Path CMakeLists.txt -Pattern '^project\(QMapShack VERSION ([0-9.]+)'
+            if (-not $project) { throw "Could not read the QMapShack version from CMakeLists.txt" }
+            $version = $project.Matches[0].Groups[1].Value
+          }
+          $installerName = "qmapshack-win64-$version-setup.exe"
+          "asset_name=$installerName" >> $env:GITHUB_OUTPUT
+
+      - name: Build Windows installer
+        env:
+          INSTALLER_NAME: ${{ steps.installer-name.outputs.asset_name }}
+        run: |
+          $makensis = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
+          & $makensis /V3 "/DPROJECT_ROOT=$env:GITHUB_WORKSPACE" "/DINSTALLER_NAME=$env:INSTALLER_NAME" msvc_64\QMapShack_CI_Installer.nsi
+          if ($LASTEXITCODE -ne 0) { throw "NSIS failed to build the installer" }
+
+      - name: Attach installer to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INSTALLER_NAME: ${{ steps.installer-name.outputs.asset_name }}
+        run: |
+          gh release upload "$env:RELEASE_TAG" "$env:INSTALLER_NAME" --repo "$env:GITHUB_REPOSITORY" --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Could not upload the Windows installer to release $env:RELEASE_TAG" }
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: QMapShack-win64
+          path: ${{ steps.installer-name.outputs.asset_name }}
