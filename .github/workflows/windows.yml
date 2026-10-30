@@ -2,7 +2,7 @@ name: Build Windows
 
 on:
   push:
-    branches: [master]
+    branches: [QMS-1302]
   release:
     types: [published]
 
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: qmapshack-windows-master
+  group: qmapshack-windows-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -20,7 +20,7 @@ env:
 
 jobs:
   build:
-    runs-on: windows-2022
+    runs-on: windows-2022 # matches the MSVC 2022 build of Qt
     steps:
       - uses: actions/checkout@v6
         with:
@@ -40,6 +40,7 @@ jobs:
             make
             subversion
             mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-zlib
 
       - name: Build Routino
         shell: msys2 {0}
@@ -47,16 +48,19 @@ jobs:
           pwd
           svn co http://routino.org/svn/trunk routino-src
           cd routino-src
-          make
+          # The full Routino build also generates web icons from the SVN checkout.
+          # The Windows package only needs the command-line tools and library.
+          make -C src
           cd ..
           mkdir -p routino/bin routino/lib routino/include routino/xml
           cp routino-src/src/*.exe routino/bin/
           cp routino-src/src/routino.dll routino-src/src/routino.lib routino/lib/
           cp routino-src/src/routino.h routino/include/
-          cp routino-src/xml/tagging*.xml routino/xml/
+          cp routino-src/xml/routino-tagging*.xml routino/xml/
           cp routino-src/xml/routino-profiles.xml     routino/xml/profiles.xml
           cp routino-src/xml/routino-tagging.xml      routino/xml/tagging.xml
           cp routino-src/xml/routino-translations.xml routino/xml/translations.xml
+          cp /mingw64/bin/libgcc_s_seh-1.dll /mingw64/bin/libwinpthread-1.dll /mingw64/bin/zlib1.dll routino/bin/
 
       # ------------------------------------------------------------------
       # Toolchain: MSVC, Qt
@@ -65,41 +69,86 @@ jobs:
         with:
           arch: x64
 
+      - name: Install Visual C++ runtime
+        run: |
+          # Qt and vcpkg binaries can require a newer runtime than the runner image.
+          # Bundle the same official installer for machines without Visual Studio.
+          $redist = Join-Path $env:RUNNER_TEMP 'vc_redist.x64.exe'
+          Invoke-WebRequest 'https://aka.ms/vc14/vc_redist.x64.exe' -OutFile $redist
+          $process = Start-Process $redist -ArgumentList '/install', '/quiet', '/norestart' -Wait -PassThru
+          if ($process.ExitCode -notin 0, 1638, 3010) {
+            throw "Visual C++ runtime installation failed with exit code $($process.ExitCode)."
+          }
+
       - name: Set up compiler cache
         uses: mozilla-actions/sccache-action@v0.0.11
+
+      # Pin the Python version used by install-qt-action.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
 
       - name: Install Qt6
         uses: jurplel/install-qt-action@v4
         with:
-          version: '6.8.*'
+          version: '6.12.0'
           arch: win64_msvc2022_64
-          modules: qt5compat qtwebengine qtpositioning qtwebchannel
+          modules: qt5compat qtpositioning qtwebchannel qtimageformats
+          setup-python: false
+          # Use the aqt version with fixes for Qt 6.11+ Windows package metadata.
+          aqtsource: git+https://github.com/miurahr/aqtinstall.git@16db45a70b5905ad596941b223469bc86a56901e
           cache: true
-          cache-key-prefix: install-qt-v2
+          cache-key-prefix: install-qt-v5
+
+      # aqt selects an obsolete pre-release WebEngine archive for Qt 6.12.
+      # Use the separately released WebEngine 6.140 package instead.
+      - name: Install Qt WebEngine 6.140
+        run: |
+          $webEngineRepo = 'https://download.qt.io/online/qtsdkrepository/windows_x86/extensions/qtwebengine/6120/61400/msvc2022_64/extensions.qtwebengine.6120.61400.win64_msvc2022_64'
+          $webEngineArchive = '6.12.0-0-202609281005qtwebengine-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z'
+          $archive = Join-Path $env:RUNNER_TEMP 'qtwebengine-6.140.0.7z'
+          Invoke-WebRequest "$webEngineRepo/$webEngineArchive" -OutFile $archive
+          python -m py7zr x $archive $env:QT_ROOT_DIR
+          if ($LASTEXITCODE -ne 0) { throw 'Could not extract Qt WebEngine 6.140.' }
 
       # ------------------------------------------------------------------
-      # GDAL, PROJ, libjpeg via vcpkg (slow the first time, then cached).
+      # GDAL recommended drivers, PROJ, libjpeg via vcpkg (slow the first time, then cached).
       # The cache is saved even if a later step fails, so the long build is not lost.
-      # Bump the "v2" in the key whenever the package list changes.
+      # Cache entries are immutable: restore the latest snapshot for this toolchain
+      # and save a new one only when vcpkg adds or replaces binary archives.
+      # Bump the "v4" in the key whenever the package list changes.
       # ------------------------------------------------------------------
+      - name: Identify vcpkg toolchain
+        id: vcpkg-toolchain
+        run: |
+          $revision = & git -C $env:VCPKG_INSTALLATION_ROOT rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Could not identify the vcpkg ports revision.' }
+          "cache-key=vcpkg-${{ runner.os }}-gdal-recommended-proj-jpeg-v4-$revision-$($env:VCToolsVersion)" >> $env:GITHUB_OUTPUT
+
       - name: Restore vcpkg cache
         id: vcpkg-cache
         uses: actions/cache/restore@v5
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: vcpkg-${{ runner.os }}-gdal-proj-jpeg-v2
+          key: ${{ steps.vcpkg-toolchain.outputs.cache-key }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ steps.vcpkg-toolchain.outputs.cache-key }}-
 
-      - name: Install GDAL, PROJ, libjpeg
+      - name: Install GDAL drivers, PROJ, libjpeg
+        id: vcpkg-install
+        env:
+          CACHE_BEFORE: ${{ hashFiles('vcpkg-archives/**/*.zip') }}
         run: |
+          "cache-before=$env:CACHE_BEFORE" >> $env:GITHUB_OUTPUT
           New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
-          vcpkg install gdal proj libjpeg-turbo --triplet x64-windows
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install 'gdal[recommended-features,tools,openjpeg,webp]' 'proj[tools]' libjpeg-turbo --triplet x64-windows "--vcpkg-root=$env:VCPKG_INSTALLATION_ROOT"
 
       - name: Save vcpkg cache
-        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        if: always() && steps.vcpkg-install.outcome == 'success' && hashFiles('vcpkg-archives/**/*.zip') != steps.vcpkg-install.outputs.cache-before
         uses: actions/cache/save@v5
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: vcpkg-${{ runner.os }}-gdal-proj-jpeg-v2
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
 
       # ------------------------------------------------------------------
       # Build QMapShack
@@ -116,11 +165,7 @@ jobs:
           -DROUTINO_DEV_PATH="$env:GITHUB_WORKSPACE/routino"
 
       - name: Build
-        run: cmake --build build --target qmapshack --parallel
-
-      - name: Show compiler cache statistics
-        if: always()
-        run: sccache --show-stats
+        run: cmake --build build --parallel
 
       # ------------------------------------------------------------------
       # Package using the directory layout expected by CAppSetupWin.
@@ -129,32 +174,189 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
 
-          $exe = Get-ChildItem build -Recurse -Filter qmapshack.exe | Select-Object -First 1
-          Copy-Item $exe.FullName dist\
+          foreach ($name in 'qmapshack.exe', 'qmaptool.exe', 'qmt_map2jnx.exe', 'qmt_rgb2pct.exe') {
+            $exe = Join-Path 'build\bin' $name
+            if (-not (Test-Path $exe)) { throw "Build output missing: $exe" }
+            Copy-Item $exe dist\
+          }
+          Copy-Item msvc_64\*.ico dist\
+          Copy-Item msvc_64\qt.conf dist\
+          Copy-Item LICENSE dist\1LICENSE.txt
+          Copy-Item msvc_64\3rdparty.txt dist\
+
+          # Offline help, generated translation catalogs, and Qt Assistant
+          New-Item -ItemType Directory -Force dist\doc\HTML, dist\translations, dist\share\proj, dist\data, dist\routino-xml | Out-Null
+          Copy-Item src\qmapshack\doc\QMSHelp.qch, src\qmapshack\doc\QMSHelp.qhc dist\doc\HTML\
+          Copy-Item src\qmaptool\doc\QMTHelp.qch, src\qmaptool\doc\QMTHelp.qhc dist\doc\HTML\
+          Copy-Item "$env:QT_ROOT_DIR\bin\assistant.exe" dist\
+          Get-ChildItem build -Recurse -Filter '*.qm' |
+            Where-Object { $_.Name -match '^(qmapshack|qmaptool|qmt_rgb2pct)(_|\.)' } |
+            Copy-Item -Destination dist\translations\
 
           # GDAL / PROJ / JPEG and their dependencies
           $vcpkgRoot = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
           Copy-Item "$vcpkgRoot\bin\*.dll" dist\
-          Copy-Item "$vcpkgRoot\share\proj" dist\share\proj -Recurse -Force
-          Copy-Item "$vcpkgRoot\share\gdal" dist\data -Recurse -Force
+          Copy-Item "$vcpkgRoot\share\proj\*" dist\share\proj\ -Recurse -Force
+          Copy-Item "$vcpkgRoot\share\gdal\*" dist\data\ -Recurse -Force
+          foreach ($tool in 'gdal', 'proj') {
+            Get-ChildItem "$vcpkgRoot\tools\$tool" -Filter '*.exe' | Copy-Item -Destination dist\
+          }
           if (Test-Path "$vcpkgRoot\bin\gdalplugins") {
             Copy-Item "$vcpkgRoot\bin\gdalplugins" dist\gdalplugins -Recurse -Force
           }
 
           # Routino
           Copy-Item routino\lib\routino.dll dist\
-          Copy-Item routino\xml dist\routino-xml -Recurse -Force
+          Copy-Item routino\bin\planetsplitter.exe dist\
+          # Keep vcpkg's zlib1.dll, which GDAL and PROJ were linked against.
+          Get-ChildItem routino\bin -Filter '*.dll' | ForEach-Object {
+            if (-not (Test-Path "dist\$($_.Name)")) { Copy-Item $_.FullName dist\ }
+          }
+          Copy-Item routino\xml\* dist\routino-xml\ -Recurse -Force
 
-          # MinGW runtime DLLs that routino.dll may need
-          foreach ($n in 'libgcc_s_seh-1.dll', 'libwinpthread-1.dll') {
-            $p = "C:\msys64\mingw64\bin\$n"
-            if (Test-Path $p) { Copy-Item $p dist\ }
+          # QMYSQL is not shipped by the Qt online installer. Use the matching MSVC 2022 build.
+          $mysqlZip = Join-Path $env:RUNNER_TEMP 'qsqlmysql.zip'
+          $mysqlDir = Join-Path $env:RUNNER_TEMP 'qsqlmysql'
+          $mysqlUrl = 'https://github.com/thecodemonkey86/qt_mysql_driver/releases/download/qmysql_6.12.0/qsqlmysql.dll_Qt_SQL_driver_6.12.0_MSVC2022_64-bit.zip'
+          Invoke-WebRequest -Uri $mysqlUrl -OutFile $mysqlZip
+          Expand-Archive -Path $mysqlZip -DestinationPath $mysqlDir -Force
+          New-Item -ItemType Directory -Force dist\sqldrivers | Out-Null
+          Copy-Item "$mysqlDir\sqldrivers\qsqlmysql.dll" dist\sqldrivers\
+          # The archive also contains OpenSSL. Preserve vcpkg's matching libraries
+          # rather than silently replacing dependencies of GDAL/PROJ/cURL.
+          Get-ChildItem $mysqlDir -Filter '*.dll' | ForEach-Object {
+            if (-not (Test-Path "dist\$($_.Name)")) { Copy-Item $_.FullName dist\ }
           }
 
-          # Qt DLLs, plugins and WebEngine (run last so Qt's own DLLs win)
-          windeployqt --release --no-translations --compiler-runtime dist\qmapshack.exe
+          # Scan every Qt executable together, including Assistant. Let windeployqt
+          # collect image plugins and their dependencies instead of copying DLLs by hand.
+          # The official Visual C++ prerequisite is handled separately by NSIS.
+          $windeployqt = Join-Path $env:QT_ROOT_DIR 'bin\windeployqt.exe'
+          $qtExecutables = 'dist\qmapshack.exe', 'dist\qmaptool.exe', 'dist\qmt_map2jnx.exe', 'dist\qmt_rgb2pct.exe', 'dist\assistant.exe'
+          # windeployqt searches the bin subdirectory of the OpenSSL root.
+          & $windeployqt --release --force --no-translations --no-compiler-runtime --add-plugin-types 'imageformats,iconengines' --openssl-root $vcpkgRoot @qtExecutables
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed with exit code $LASTEXITCODE" }
+          foreach ($name in 'Qt6Core.dll', 'Qt6Gui.dll', 'Qt6WebEngineCore.dll', 'Qt6WebEngineWidgets.dll') {
+            $qtDll = Join-Path $env:QT_ROOT_DIR "bin\$name"
+            if (-not (Test-Path $qtDll)) { throw "Qt runtime DLL missing from installation: $qtDll" }
+            Write-Host "$name file version: $((Get-Item $qtDll).VersionInfo.FileVersion)"
+          }
+          # Catch older/mixed Qt DLLs before they get into the installer.
+          Get-ChildItem dist -Filter 'Qt6*.dll' | ForEach-Object {
+            $sourceQtDll = Join-Path $env:QT_ROOT_DIR "bin\$($_.Name)"
+            if (-not (Test-Path $sourceQtDll) -or
+                (Get-FileHash $sourceQtDll).Hash -ne (Get-FileHash $_.FullName).Hash) {
+              throw "Staged $($_.Name) does not match the Qt installation used for this build."
+            }
+          }
+
+          # QtWebEngine's locale packs are data files, not Qt translation catalogs.
+          # windeployqt already creates this directory for en-US, even with --no-translations.
+          New-Item -ItemType Directory -Force dist\translations\qtwebengine_locales | Out-Null
+          Copy-Item "$env:QT_ROOT_DIR\translations\qtwebengine_locales\*.pak" dist\translations\qtwebengine_locales\ -Force
+          Get-ChildItem "$env:QT_ROOT_DIR\translations" -Filter '*.qm' | Copy-Item -Destination dist\translations\ -Force
+
+          Copy-Item "$env:RUNNER_TEMP\vc_redist.x64.exe" dist\
+
+          foreach ($file in 'platforms\qwindows.dll', 'imageformats\qsvg.dll', 'iconengines\qsvgicon.dll',
+                            'sqldrivers\qsqlite.dll', 'sqldrivers\qsqlmysql.dll', 'QtWebEngineProcess.exe',
+                            'resources\icudtl.dat', 'resources\qtwebengine_resources.pak',
+                            'resources\qtwebengine_resources_100p.pak', 'resources\qtwebengine_resources_200p.pak',
+                            'translations\qtwebengine_locales\en-US.pak', 'share\proj\proj.db',
+                            'gdalinfo.exe', 'gdaladdo.exe', 'gdal_translate.exe', 'gdalwarp.exe', 'gdalbuildvrt.exe', 'projinfo.exe') {
+            if (-not (Test-Path "dist\$file" -PathType Leaf)) { throw "Staged runtime file missing: $file" }
+          }
 
           Get-ChildItem dist | Select-Object Name, Length
+
+      - name: Verify Qt DLL entry points
+        shell: pwsh
+        run: |
+          # QPainter::setBrush(QColor) was added in Qt 6.9; confirm the staged
+          # QtGui runtime is new enough, then load WebEngine through Windows.
+          $qtGui = Join-Path $env:GITHUB_WORKSPACE 'dist\Qt6Gui.dll'
+          if (-not (Test-Path $qtGui)) { throw "Staged Qt DLL missing: $qtGui" }
+          $qtGuiVersionText = (Get-Item $qtGui).VersionInfo.FileVersion
+          if ($qtGuiVersionText -notmatch '^\d+(\.\d+){1,3}') {
+            throw "Could not read Qt6Gui.dll version from '$qtGuiVersionText'."
+          }
+          $qtGuiVersion = [version]$Matches[0]
+          Write-Host "Staged Qt6Gui.dll file version: $qtGuiVersionText"
+          if ($qtGuiVersion -lt [version]'6.9.0') {
+            throw "Qt6Gui.dll version $qtGuiVersionText is too old for QPainter::setBrush(QColor)."
+          }
+          $dumpbin = (Get-Command dumpbin.exe -ErrorAction Stop).Source
+          $guiExports = & $dumpbin /nologo /exports $qtGui 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "dumpbin could not inspect $qtGui" }
+          $painterSymbol = '?setBrush@QPainter@@QEAAXVQColor@@@Z'
+          if (-not $guiExports.Contains($painterSymbol)) {
+            throw "Qt6Gui.dll version $qtGuiVersionText does not export $painterSymbol"
+          }
+
+          # SetDllDirectory cannot replace DLLs already loaded by PowerShell.
+          # Use a native probe with a static CRT and search only dist + System32.
+          # Keep the probe outside dist so it is not included in the installer.
+          $probe = Join-Path $env:RUNNER_TEMP 'verify_qt_runtime.exe'
+          $probeObject = Join-Path $env:RUNNER_TEMP 'verify_qt_runtime.obj'
+          # Chromium imports require Common Controls v6; Windows defaults to v5
+          # unless the executable's manifest explicitly requests v6.
+          $commonControls = "/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
+          & cl.exe /nologo /W4 /WX /O2 /MT "/Fo$probeObject" "/Fe$probe" msvc_64\verify_qt_runtime.c /link /MANIFEST:EMBED $commonControls
+          if ($LASTEXITCODE -ne 0) { throw 'Could not compile the Qt runtime verifier.' }
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'dist'
+          & $probe $dist 'Qt6Gui.dll' $painterSymbol
+          $guiFailed = $LASTEXITCODE -ne 0
+          & $probe $dist 'Qt6WebEngineWidgets.dll'
+          if ($guiFailed -or $LASTEXITCODE -ne 0) {
+            # Probe each module separately to narrow down a transitive failure.
+            foreach ($dll in Get-ChildItem $dist -Filter 'Qt6*.dll') {
+              & $probe $dist $dll.Name
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "Unresolved imports in $($dll.Name); direct dependencies:"
+                & $dumpbin /nologo /dependents $dll.FullName
+              }
+            }
+            throw 'Windows could not resolve the staged Qt runtime imports. See the per-DLL diagnostics above.'
+          }
+          Write-Host 'Staged Qt WebEngine DLL imports resolved successfully.'
+
+          foreach ($dll in 'routino.dll', 'sqldrivers\qsqlmysql.dll', 'sqldrivers\qsqlite.dll',
+                           'platforms\qwindows.dll', 'imageformats\qsvg.dll', 'iconengines\qsvgicon.dll') {
+            & $probe $dist $dll
+            if ($LASTEXITCODE -ne 0) { throw "Staged runtime imports could not be resolved: $dll" }
+          }
+
+      - name: Smoke test staged applications
+        shell: pwsh
+        run: |
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'dist'
+          # Child processes must not find Qt, MSYS2, or vcpkg DLLs on the build PATH.
+          $env:PATH = "$dist;$env:SystemRoot\System32;$env:SystemRoot"
+          $env:QT_PLUGIN_PATH = $dist
+          $env:QT_QPA_PLATFORM_PLUGIN_PATH = Join-Path $dist 'platforms'
+          $env:QT_COMMAND_LINE_PARSER_NO_GUI_MESSAGE_BOXES = '1'
+          $env:GDAL_DATA = Join-Path $dist 'data'
+          $env:GDAL_DRIVER_PATH = Join-Path $dist 'gdalplugins'
+          $env:PROJ_DATA = Join-Path $dist 'share\proj'
+
+          foreach ($name in 'qmapshack.exe', 'qmaptool.exe', 'gdalinfo.exe', 'gdaladdo.exe',
+                            'gdal_translate.exe', 'gdalwarp.exe', 'gdalbuildvrt.exe', 'projinfo.exe') {
+            $stdout = Join-Path $env:RUNNER_TEMP "$name.stdout.log"
+            $stderr = Join-Path $env:RUNNER_TEMP "$name.stderr.log"
+            $arguments = if ($name -eq 'projinfo.exe') { 'EPSG:4326' } else { '--version' }
+            $process = Start-Process (Join-Path $dist $name) -ArgumentList $arguments -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            if (-not $process.WaitForExit(30000)) {
+              $process.Kill()
+              throw "Staged $name did not exit within 30 seconds."
+            }
+            Get-Content $stdout, $stderr | Write-Host
+            if ($process.ExitCode -ne 0) { throw "Staged $name failed with exit code $($process.ExitCode)." }
+          }
+          $formats = & "$dist\gdalinfo.exe" --formats | Out-String
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list staged GDAL drivers.' }
+          foreach ($driver in 'GTiff', 'VRT', 'JPEG', 'PNG', 'JP2OpenJPEG', 'WEBP') {
+            if ($formats -notmatch "(?m)^\s*$driver\s+-") { throw "Staged GDAL driver missing: $driver" }
+          }
 
       - name: Install NSIS
         run: choco install nsis --yes --no-progress
@@ -191,7 +393,8 @@ jobs:
           gh release upload "$env:RELEASE_TAG" "$env:INSTALLER_NAME" --repo "$env:GITHUB_REPOSITORY" --clobber
           if ($LASTEXITCODE -ne 0) { throw "Could not upload the Windows installer to release $env:RELEASE_TAG" }
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
-          name: QMapShack-win64
           path: ${{ steps.installer-name.outputs.asset_name }}
+          archive: false
+          if-no-files-found: error
