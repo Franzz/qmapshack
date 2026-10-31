@@ -2,15 +2,23 @@ name: Build Windows
 
 on:
   push:
-    branches: [QMS-1302]
-  release:
-    types: [published]
+    branches: [build]
+  # Scheduled workflows run only on the default branch; use build as the fork default.
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Build again even if the latest upstream release already has an installer
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 concurrency:
-  group: qmapshack-windows-${{ github.event_name }}-${{ github.ref }}
+  # Serialize checks, merges, build-number reservations, and publishing together.
+  group: qmapshack-windows-releases
   cancel-in-progress: false
 
 env:
@@ -19,12 +27,56 @@ env:
   SCCACHE_GHA_ENABLED: "true"
 
 jobs:
-  build:
-    runs-on: windows-2022 # matches the MSVC 2022 build of Qt
+  prepare:
+    if: github.ref == 'refs/heads/build'
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.upstream.outputs.should_build }}
+      upstream_tag: ${{ steps.upstream.outputs.upstream_tag }}
+      upstream_url: ${{ steps.upstream.outputs.upstream_url }}
+      upstream_sha: ${{ steps.upstream.outputs.upstream_sha }}
+      master_sha: ${{ steps.upstream.outputs.master_sha }}
+      build_sha: ${{ steps.upstream.outputs.build_sha }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
+          ref: build
+          fetch-depth: 0
+
+      - name: Check upstream release and merge master into build
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # A build fix must produce a new installer even if this version was released.
+          REBUILD: ${{ github.event_name == 'push' || inputs.rebuild || false }}
+        run: python3 .github/scripts/upstream_release.py prepare
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    runs-on: windows-2022 # matches the MSVC 2022 build of Qt
+    env:
+      UPSTREAM_TAG: ${{ needs.prepare.outputs.upstream_tag }}
+      UPSTREAM_URL: ${{ needs.prepare.outputs.upstream_url }}
+      UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
+      MASTER_SHA: ${{ needs.prepare.outputs.master_sha }}
+      BUILD_SHA: ${{ needs.prepare.outputs.build_sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.build_sha }}
+          fetch-depth: 0
+
+      # Pin the Python version used by release automation and install-qt-action.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Reserve the next build number
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/upstream_release.py reserve
 
       # ------------------------------------------------------------------
       # Routino (built with MinGW, as upstream does; see msvc_64/build_routino*.bat)
@@ -82,11 +134,6 @@ jobs:
 
       - name: Set up compiler cache
         uses: mozilla-actions/sccache-action@v0.0.11
-
-      # Pin the Python version used by install-qt-action.
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.14'
 
       - name: Install Qt6
         uses: jurplel/install-qt-action@v4
@@ -364,15 +411,9 @@ jobs:
       - name: Resolve installer filename
         id: installer-name
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
         run: |
-          $version = $env:RELEASE_TAG
-          if (-not $version) {
-            $project = Select-String -Path CMakeLists.txt -Pattern '^project\(QMapShack VERSION ([0-9.]+)'
-            if (-not $project) { throw "Could not read the QMapShack version from CMakeLists.txt" }
-            $version = $project.Matches[0].Groups[1].Value
-          }
-          $installerName = "qmapshack-win64-$version-setup.exe"
+          $installerName = "qmapshack-win64-$env:RELEASE_TAG-setup.exe"
           "asset_name=$installerName" >> $env:GITHUB_OUTPUT
 
       - name: Build Windows installer
@@ -383,18 +424,16 @@ jobs:
           & $makensis /V3 "/DPROJECT_ROOT=$env:GITHUB_WORKSPACE" "/DINSTALLER_NAME=$env:INSTALLER_NAME" msvc_64\QMapShack_CI_Installer.nsi
           if ($LASTEXITCODE -ne 0) { throw "NSIS failed to build the installer" }
 
-      - name: Attach installer to release
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          INSTALLER_NAME: ${{ steps.installer-name.outputs.asset_name }}
-        run: |
-          gh release upload "$env:RELEASE_TAG" "$env:INSTALLER_NAME" --repo "$env:GITHUB_REPOSITORY" --clobber
-          if ($LASTEXITCODE -ne 0) { throw "Could not upload the Windows installer to release $env:RELEASE_TAG" }
-
       - uses: actions/upload-artifact@v7
         with:
+          name: ${{ steps.release.outputs.release_tag }}
           path: ${{ steps.installer-name.outputs.asset_name }}
           archive: false
           if-no-files-found: error
+
+      - name: Publish release with Windows installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          INSTALLER_NAME: ${{ steps.installer-name.outputs.asset_name }}
+        run: python .github/scripts/upstream_release.py publish
