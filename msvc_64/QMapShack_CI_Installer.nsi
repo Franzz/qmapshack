@@ -62,6 +62,8 @@ Section "Install"
   SetRegView 64
   SetShellVarContext all
   SetOutPath "$INSTDIR"
+  ; Remove plugins from older GDAL builds before installing matching binaries.
+  RMDir /r "$INSTDIR\gdalplugins"
   File /r /x vc_redist.x64.exe "${PROJECT_ROOT}\dist\*"
   File "${PROJECT_ROOT}\msvc_64\QMapShack.ico"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
