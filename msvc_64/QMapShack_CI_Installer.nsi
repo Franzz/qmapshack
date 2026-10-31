@@ -20,6 +20,7 @@ SetCompressor /SOLID lzma
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${PROJECT_ROOT}\LICENSE"
+!insertmacro MUI_PAGE_LICENSE "${PROJECT_ROOT}\msvc_64\LICENSE_Gisinternals.txt"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -84,6 +85,7 @@ Section "Install"
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\QMapTool Help.lnk" "$INSTDIR\assistant.exe" '-collectionFile "$INSTDIR\doc\HTML\QMTHelp.qhc"'
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\GDAL shell.lnk" "$SYSDIR\cmd.exe" '/k ""$INSTDIR\gdal_shell.bat""' "$INSTDIR\gdalicon.ico"
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe"
+  CreateShortcut "$SMPROGRAMS\${APP_NAME}\Third-party notices.lnk" "$INSTDIR\3rdparty.txt"
 
   WriteRegStr HKLM "Software\${APP_NAME}" "Install_Dir" "$INSTDIR"
   WriteRegStr HKLM "${APP_KEY}" "DisplayName" "${APP_NAME}"
@@ -103,6 +105,7 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\${APP_NAME}\QMapTool Help.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\GDAL shell.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk"
+  Delete "$SMPROGRAMS\${APP_NAME}\Third-party notices.lnk"
   RMDir "$SMPROGRAMS\${APP_NAME}"
   DeleteRegKey HKLM "${APP_KEY}"
   DeleteRegKey HKLM "Software\${APP_NAME}"

@@ -57,6 +57,13 @@ Pushing commits to `build` automatically starts a new build, even when the
 latest upstream version already has an installer. This lets packaging and
 workflow fixes produce the next numbered release for the same upstream version.
 
+Release descriptions list the build-branch commit messages since the previous
+published installer for that upstream version. Each commit appears as a bullet,
+with its full message body underneath when present. Failed or draft builds do
+not reset this list, so changes remain included until an installer is published.
+Upstream-only commits and merge commits are excluded. For the first build of a
+version triggered by a push, the pushed commit range is used when available.
+
 In Actions, select **Build Windows**, then **Run workflow** on `build`. Leave
 `rebuild` unchecked to check for an unbuilt upstream release immediately. Check
 it to rebuild the latest upstream release even when an installer already
@@ -102,6 +109,36 @@ your own GitHub account so the scheduled notifications reach you.
 
 The Actions failure filter is an account setting and also applies to other
 workflows you trigger. The release subscription is specific to this repository.
+
+## Windows raster runtime
+
+The installer uses one pinned GISInternals MSVC 2022 x64 distribution for GDAL,
+PROJ, JPEG, their headers/import libraries, and runtime plugins. The package
+URLs and SHA256 hashes are recorded in `raster/gisinternals.lock.json`.
+Do not mix these plugins with a GDAL DLL built by vcpkg or another provider.
+
+GDAL provides JPEG, GeoPackage, WebP, TIFF, KEA, KML/KMZ raster overlays,
+MBTiles, PDF, OziExplorer `.map` calibration files, ECW and MrSID support.
+MBTiles and GeoPackage tile decoding uses the same bundled PNG, JPEG and WebP
+codecs. Use georeferenced VRT wrappers to load these GDAL-backed maps in
+QMapShack. JNX, GEMF and RMAP use QMapShack's existing native readers.
+Legacy OziExplorer `.ozf2` and `.ozfx3` support is intentionally excluded.
+
+`scripts/gisinternals.py` verifies both downloaded archives, stages the selected
+plugins and their transitive DLL imports, and copies the GDAL/PROJ data files.
+It retains additional GDAL tools and general-purpose plugins from the same SDK.
+Missing dependencies stop packaging. The installer retains all original SDK
+license files and its runtime module list under `licenses/gisinternals/`.
+
+The repository's existing `msvc_64/LICENSE_Gisinternals.txt` and its installer
+license page are preserved. The package's separate `ECW5License.rtf` and
+`MRSIDLicense.rtf` are also included; the general GISInternals license does not
+replace those vendor terms. The ECW ownership notice is shown in the About box
+and in `3rdparty.txt`. The Start menu includes a link to those notices.
+ECW support here is for desktop decoding; no ECW encoding license is supplied.
+
+Fork-specific CMake integration and ownership notices live in new files under
+`raster/`, leaving upstream application source files unchanged.
 
 ## Local verification
 

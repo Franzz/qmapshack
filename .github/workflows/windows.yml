@@ -22,8 +22,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  VCPKG_DEFAULT_TRIPLET: x64-windows
-  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-archives
+  GISINTERNALS_ROOT: ${{ github.workspace }}\gisinternals
   SCCACHE_GHA_ENABLED: "true"
 
 jobs:
@@ -123,7 +122,7 @@ jobs:
 
       - name: Install Visual C++ runtime
         run: |
-          # Qt and vcpkg binaries can require a newer runtime than the runner image.
+          # Qt and GISInternals binaries can require a newer runtime than the runner image.
           # Bundle the same official installer for machines without Visual Studio.
           $redist = Join-Path $env:RUNNER_TEMP 'vc_redist.x64.exe'
           Invoke-WebRequest 'https://aka.ms/vc14/vc_redist.x64.exe' -OutFile $redist
@@ -159,43 +158,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Could not extract Qt WebEngine 6.140.' }
 
       # ------------------------------------------------------------------
-      # GDAL recommended drivers, PROJ, libjpeg via vcpkg (slow the first time, then cached).
-      # The cache is saved even if a later step fails, so the long build is not lost.
-      # Cache entries are immutable: restore the latest snapshot for this toolchain
-      # and save a new one only when vcpkg adds or replaces binary archives.
-      # Bump the "v4" in the key whenever the package list changes.
+      # Use one matching GISInternals runtime/SDK, including ECW, MrSID, KEA and PDF.
+      # Proprietary driver plugins cannot be mixed with a separately built vcpkg GDAL.
       # ------------------------------------------------------------------
-      - name: Identify vcpkg toolchain
-        id: vcpkg-toolchain
-        run: |
-          $revision = & git -C $env:VCPKG_INSTALLATION_ROOT rev-parse HEAD
-          if ($LASTEXITCODE -ne 0) { throw 'Could not identify the vcpkg ports revision.' }
-          "cache-key=vcpkg-${{ runner.os }}-gdal-recommended-proj-jpeg-v4-$revision-$($env:VCToolsVersion)" >> $env:GITHUB_OUTPUT
-
-      - name: Restore vcpkg cache
-        id: vcpkg-cache
-        uses: actions/cache/restore@v5
+      - name: Cache pinned GISInternals archives
+        uses: actions/cache@v5
         with:
-          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: ${{ steps.vcpkg-toolchain.outputs.cache-key }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            ${{ steps.vcpkg-toolchain.outputs.cache-key }}-
+          path: ${{ runner.temp }}\gisinternals-downloads
+          key: gisinternals-${{ runner.os }}-${{ hashFiles('.github/raster/gisinternals.lock.json') }}
 
-      - name: Install GDAL drivers, PROJ, libjpeg
-        id: vcpkg-install
-        env:
-          CACHE_BEFORE: ${{ hashFiles('vcpkg-archives/**/*.zip') }}
-        run: |
-          "cache-before=$env:CACHE_BEFORE" >> $env:GITHUB_OUTPUT
-          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
-          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install 'gdal[recommended-features,tools,openjpeg,webp]' 'proj[tools]' libjpeg-turbo --triplet x64-windows "--vcpkg-root=$env:VCPKG_INSTALLATION_ROOT"
-
-      - name: Save vcpkg cache
-        if: always() && steps.vcpkg-install.outcome == 'success' && hashFiles('vcpkg-archives/**/*.zip') != steps.vcpkg-install.outputs.cache-before
-        uses: actions/cache/save@v5
-        with:
-          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
+      - name: Fetch matching GDAL, PROJ, JPEG and driver SDK
+        run: python .github/scripts/gisinternals.py fetch --root "$env:GISINTERNALS_ROOT" --cache "$env:RUNNER_TEMP\gisinternals-downloads"
 
       # ------------------------------------------------------------------
       # Build QMapShack
@@ -205,10 +178,18 @@ jobs:
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
-          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-          -DVCPKG_TARGET_TRIPLET=x64-windows
+          -DGDAL_DEV_PATH="$env:GISINTERNALS_ROOT"
+          -DGDAL_INCLUDE_DIR="$env:GISINTERNALS_ROOT/include"
+          -DGDAL_LIBRARY="$env:GISINTERNALS_ROOT/lib/gdal_i.lib"
+          -DPROJ_DEV_PATH="$env:GISINTERNALS_ROOT"
+          -DPROJ_INCLUDE_DIR="$env:GISINTERNALS_ROOT/include/proj9"
+          -DLIBPROJ_LIBRARY="$env:GISINTERNALS_ROOT/lib/proj9.lib"
+          -DJPEG_DEV_PATH="$env:GISINTERNALS_ROOT"
+          -DJPEG_INCLUDE_DIR="$env:GISINTERNALS_ROOT/include"
+          -DLIBJPEG_LIBRARY="$env:GISINTERNALS_ROOT/lib/libjpeg.lib"
+          -DCMAKE_PROJECT_QMapShack_INCLUDE="$env:GITHUB_WORKSPACE/.github/raster/ci-runtime.cmake"
           -DROUTINO_DEV_PATH="$env:GITHUB_WORKSPACE/routino"
 
       - name: Build
@@ -229,7 +210,8 @@ jobs:
           Copy-Item msvc_64\*.ico dist\
           Copy-Item msvc_64\qt.conf dist\
           Copy-Item LICENSE dist\1LICENSE.txt
-          Copy-Item msvc_64\3rdparty.txt dist\
+          Copy-Item .github\raster\third-party-notices.txt dist\3rdparty.txt
+          Copy-Item msvc_64\LICENSE_Gisinternals.txt dist\
 
           # Offline help, generated translation catalogs, and Qt Assistant
           New-Item -ItemType Directory -Force dist\doc\HTML, dist\translations, dist\share\proj, dist\data, dist\routino-xml | Out-Null
@@ -240,22 +222,14 @@ jobs:
             Where-Object { $_.Name -match '^(qmapshack|qmaptool|qmt_rgb2pct)(_|\.)' } |
             Copy-Item -Destination dist\translations\
 
-          # GDAL / PROJ / JPEG and their dependencies
-          $vcpkgRoot = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
-          Copy-Item "$vcpkgRoot\bin\*.dll" dist\
-          Copy-Item "$vcpkgRoot\share\proj\*" dist\share\proj\ -Recurse -Force
-          Copy-Item "$vcpkgRoot\share\gdal\*" dist\data\ -Recurse -Force
-          foreach ($tool in 'gdal', 'proj') {
-            Get-ChildItem "$vcpkgRoot\tools\$tool" -Filter '*.exe' | Copy-Item -Destination dist\
-          }
-          if (Test-Path "$vcpkgRoot\bin\gdalplugins") {
-            Copy-Item "$vcpkgRoot\bin\gdalplugins" dist\gdalplugins -Recurse -Force
-          }
+          # Copy the import dependency closure from the same SDK used for linking.
+          python .github/scripts/gisinternals.py stage --root "$env:GISINTERNALS_ROOT" --dist dist
+          if ($LASTEXITCODE -ne 0) { throw 'Could not stage the GISInternals runtime.' }
 
           # Routino
           Copy-Item routino\lib\routino.dll dist\
           Copy-Item routino\bin\planetsplitter.exe dist\
-          # Keep vcpkg's zlib1.dll, which GDAL and PROJ were linked against.
+          # Preserve the GISInternals copies of shared dependencies.
           Get-ChildItem routino\bin -Filter '*.dll' | ForEach-Object {
             if (-not (Test-Path "dist\$($_.Name)")) { Copy-Item $_.FullName dist\ }
           }
@@ -269,7 +243,7 @@ jobs:
           Expand-Archive -Path $mysqlZip -DestinationPath $mysqlDir -Force
           New-Item -ItemType Directory -Force dist\sqldrivers | Out-Null
           Copy-Item "$mysqlDir\sqldrivers\qsqlmysql.dll" dist\sqldrivers\
-          # The archive also contains OpenSSL. Preserve vcpkg's matching libraries
+          # The archive also contains OpenSSL. Preserve GISInternals' matching libraries
           # rather than silently replacing dependencies of GDAL/PROJ/cURL.
           Get-ChildItem $mysqlDir -Filter '*.dll' | ForEach-Object {
             if (-not (Test-Path "dist\$($_.Name)")) { Copy-Item $_.FullName dist\ }
@@ -281,7 +255,7 @@ jobs:
           $windeployqt = Join-Path $env:QT_ROOT_DIR 'bin\windeployqt.exe'
           $qtExecutables = 'dist\qmapshack.exe', 'dist\qmaptool.exe', 'dist\qmt_map2jnx.exe', 'dist\qmt_rgb2pct.exe', 'dist\assistant.exe'
           # windeployqt searches the bin subdirectory of the OpenSSL root.
-          & $windeployqt --release --force --no-translations --no-compiler-runtime --add-plugin-types 'imageformats,iconengines' --openssl-root $vcpkgRoot @qtExecutables
+          & $windeployqt --release --force --no-translations --no-compiler-runtime --add-plugin-types 'imageformats,iconengines' --openssl-root $env:GISINTERNALS_ROOT @qtExecutables
           if ($LASTEXITCODE -ne 0) { throw "windeployqt failed with exit code $LASTEXITCODE" }
           foreach ($name in 'Qt6Core.dll', 'Qt6Gui.dll', 'Qt6WebEngineCore.dll', 'Qt6WebEngineWidgets.dll') {
             $qtDll = Join-Path $env:QT_ROOT_DIR "bin\$name"
@@ -377,7 +351,7 @@ jobs:
         shell: pwsh
         run: |
           $dist = Join-Path $env:GITHUB_WORKSPACE 'dist'
-          # Child processes must not find Qt, MSYS2, or vcpkg DLLs on the build PATH.
+          # Child processes must load dependencies from the packaged directory.
           $env:PATH = "$dist;$env:SystemRoot\System32;$env:SystemRoot"
           $env:QT_PLUGIN_PATH = $dist
           $env:QT_QPA_PLATFORM_PLUGIN_PATH = Join-Path $dist 'platforms'

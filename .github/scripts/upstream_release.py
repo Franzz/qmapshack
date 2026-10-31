@@ -68,6 +68,52 @@ def has_installer(release, upstream_tag):
     )
 
 
+def resolve_commit(revision):
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{revision}^{{commit}}"],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def build_changes(repository, upstream_tag, build_sha):
+    # Failed attempts reserve tags too. Only a published installer is a changelog baseline.
+    completed = [item for item in releases(repository) if has_installer(item, upstream_tag)]
+    completed.sort(key=lambda item: int(item["tag_name"].rsplit("-build", 1)[1]), reverse=True)
+    baseline = None
+    for item in completed:
+        baseline = resolve_commit(f"refs/tags/{item['tag_name']}")
+        if baseline:
+            break
+
+    if baseline is None:
+        if os.environ.get("GITHUB_EVENT_NAME") != "push":
+            return ""
+        # The first build for a version has no earlier installer. Use the complete
+        # push range rather than the event's potentially truncated commits array.
+        event_path = os.environ.get("GITHUB_EVENT_PATH")
+        event = json.loads(Path(event_path).read_text(encoding="utf-8")) if event_path else {}
+        before = event.get("before", "")
+        if isinstance(before, str) and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", before):
+            baseline = resolve_commit(before)
+
+    excluded = [f"^{os.environ['MASTER_SHA']}"]
+    if baseline:
+        excluded.append(f"^{baseline}")
+    messages = run("git", "log", "--reverse", "--topo-order", "--no-merges",
+                   "--format=%B%x00", build_sha, *excluded, "--")
+    entries = []
+    for message in messages.split("\0"):
+        lines = message.strip().splitlines()
+        if not lines:
+            continue
+        entry = "- " + lines[0]
+        if len(lines) > 1:
+            entry += "\n" + "\n".join("    " + line if line else "" for line in lines[1:])
+        entries.append(entry)
+    return "\n\n".join(entries)
+
+
 def prepare(repository, rebuild=False):
     release = api(f"repos/{UPSTREAM}/releases/latest")
     upstream_tag = validate_version(release["tag_name"])
@@ -142,9 +188,12 @@ def publish(repository, upstream_tag, build_sha, release_tag, asset):
         raise RuntimeError("Release tag does not point to the built commit.")
     run_url = (f"{os.environ['GITHUB_SERVER_URL']}/{repository}/actions/runs/"
                f"{os.environ['GITHUB_RUN_ID']}")
+    changes = build_changes(repository, upstream_tag, build_sha)
+    changelog = f"Build changes:\n\n{changes}\n\n" if changes else ""
     notes = (
         f"Windows installer for QMapShack {upstream_tag}.\n\n"
         f"Upstream release: {os.environ['UPSTREAM_URL']}\n\n"
+        f"{changelog}"
         f"Upstream release commit: `{os.environ['UPSTREAM_SHA']}`\n"
         f"Upstream master commit: `{os.environ['MASTER_SHA']}`\n"
         f"Build commit: `{build_sha}`\n\n"

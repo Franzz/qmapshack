@@ -1,0 +1,22 @@
+{
+  "package": "release-1944-x64-gdal-3-12-1-mapserver-8-6-0",
+  "gdal_version": "3.12.1",
+  "compiler": "MSVC 2022 x64",
+  "archives": [
+    {
+      "name": "runtime.zip",
+      "url": "https://download.gisinternals.com/sdk/downloads/release-1944-x64-gdal-3-12-1-mapserver-8-6-0.zip",
+      "sha256": "f4e0775554be71d51840cd55a3a214b4b4bb8ff29b6e323fcaff304416aabdad"
+    },
+    {
+      "name": "libraries.zip",
+      "url": "https://download.gisinternals.com/sdk/downloads/release-1944-x64-gdal-3-12-1-mapserver-8-6-0-libs.zip",
+      "sha256": "dd59e6bf2261253d0556d3ec04a85b99f17a9863a5690bf5a0026f8eb4c2c9df"
+    }
+  ],
+  "plugins": [
+    "gdal_ECW_JP2ECW.dll", "gdal_MrSID.dll", "gdal_KEA.dll", "gdal_PDF.dll",
+    "gdal_FITS.dll", "gdal_GIF.dll", "gdal_HDF4.dll", "gdal_HDF5.dll", "gdal_netCDF.dll"
+  ],
+  "required_licenses": ["ECW5License.rtf", "MRSIDLicense.rtf", "GDALLicense.rtf", "GISInternalsLicense.rtf"]
+}

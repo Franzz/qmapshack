@@ -1,0 +1,43 @@
+QMapShack Windows build dependencies
+==================================
+
+QMapShack is licensed under the GNU GPL version 3 or later; see 1LICENSE.txt.
+Sources: https://github.com/Maproom/qmapshack and this build's linked source tag.
+
+This build uses Qt 6 (MSVC 2022), the Microsoft Visual C++ runtime, Routino,
+and one matching GISInternals GDAL/PROJ/JPEG distribution. The exact GISInternals
+package, download hashes, and copied runtime modules are recorded under
+licenses/gisinternals/. Original vendor license files are preserved there,
+including the separate ECW and MrSID terms. LICENSE_Gisinternals.txt preserves
+the GISInternals notice already provided by the QMapShack repository.
+
+ECW / ERDAS SDK ownership notice
+------------------------------
+This application supports the ECW data format and ECWP compression protocols.
+Portions of this computer program are Copyright 2007-2013 Intergraph
+Corporation. All rights reserved. Creating compressed files using ECW
+technology is protected by one or more of U.S. Patent No. 6,201,897,
+No. 6,442,298 and No. 6,633,688.
+
+The ECW runtime supports desktop decoding. See
+licenses/gisinternals/ECW5License.rtf for the supplied SDK terms.
+
+MrSID
+-----
+The MrSID decoder and its original license are supplied by GISInternals.
+See licenses/gisinternals/MRSIDLicense.rtf.
+
+Other bundled components
+------------------------
+Qt: https://www.qt.io/licensing/
+GDAL: https://gdal.org/
+PROJ: https://proj.org/
+Routino: https://www.routino.org/
+JPEG: https://www.ijg.org/
+Qt MySQL driver: https://github.com/thecodemonkey86/qt_mysql_driver/
+
+The GISInternals runtime also includes dependencies used by raster plugins
+(including KEA/HDF5, PDF/Poppler, WebP, PNG, JPEG, TIFF, SQLite, zlib and
+OpenSSL). Preserve the original GISInternals and component license notices
+when redistributing this package. The general GISInternals notice does not
+replace the separate proprietary SDK license terms.
