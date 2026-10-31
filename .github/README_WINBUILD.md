@@ -130,6 +130,16 @@ It retains additional GDAL tools and general-purpose plugins from the same SDK.
 Missing dependencies stop packaging. The installer retains all original SDK
 license files and its runtime module list under `licenses/gisinternals/`.
 
+The QMYSQL database plugin is built from the exact Qt version installed by the
+workflow, using the MySQL headers, import library and runtime DLL from that same
+GISInternals package. Qt source URLs and hashes are pinned in
+`raster/qt-mysql.lock.json`; update that lock when changing the installed Qt
+version. This prevents a prebuilt plugin from requiring MySQL entry points that
+the bundled client does not provide. GDAL and QMYSQL share the GISInternals
+MySQL/OpenSSL libraries. Qt source license files and the source lock are retained
+under `licenses/qt-mysql/`. The existing Windows import checks validate the
+staged plugin before packaging.
+
 The repository's existing `msvc_64/LICENSE_Gisinternals.txt` and its installer
 license page are preserved. The package's separate `ECW5License.rtf` and
 `MRSIDLicense.rtf` are also included; the general GISInternals license does not

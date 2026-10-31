@@ -170,6 +170,21 @@ jobs:
       - name: Fetch matching GDAL, PROJ, JPEG and driver SDK
         run: python .github/scripts/gisinternals.py fetch --root "$env:GISINTERNALS_ROOT" --cache "$env:RUNNER_TEMP\gisinternals-downloads"
 
+      - name: Cache pinned Qt MySQL driver sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}\qt-mysql-downloads
+          key: qt-mysql-${{ runner.os }}-${{ hashFiles('.github/raster/qt-mysql.lock.json') }}
+
+      - name: Build Qt MySQL driver against the GISInternals client
+        run: >
+          python .github/scripts/qt_mysql.py
+          --qt-root "$env:QT_ROOT_DIR"
+          --sdk-root "$env:GISINTERNALS_ROOT"
+          --work "$env:RUNNER_TEMP\qt-mysql"
+          --cache "$env:RUNNER_TEMP\qt-mysql-downloads"
+          --dist dist
+
       # ------------------------------------------------------------------
       # Build QMapShack
       # ------------------------------------------------------------------
@@ -235,19 +250,9 @@ jobs:
           }
           Copy-Item routino\xml\* dist\routino-xml\ -Recurse -Force
 
-          # QMYSQL is not shipped by the Qt online installer. Use the matching MSVC 2022 build.
-          $mysqlZip = Join-Path $env:RUNNER_TEMP 'qsqlmysql.zip'
-          $mysqlDir = Join-Path $env:RUNNER_TEMP 'qsqlmysql'
-          $mysqlUrl = 'https://github.com/thecodemonkey86/qt_mysql_driver/releases/download/qmysql_6.12.0/qsqlmysql.dll_Qt_SQL_driver_6.12.0_MSVC2022_64-bit.zip'
-          Invoke-WebRequest -Uri $mysqlUrl -OutFile $mysqlZip
-          Expand-Archive -Path $mysqlZip -DestinationPath $mysqlDir -Force
-          New-Item -ItemType Directory -Force dist\sqldrivers | Out-Null
-          Copy-Item "$mysqlDir\sqldrivers\qsqlmysql.dll" dist\sqldrivers\
-          # The archive also contains OpenSSL. Preserve GISInternals' matching libraries
-          # rather than silently replacing dependencies of GDAL/PROJ/cURL.
-          Get-ChildItem $mysqlDir -Filter '*.dll' | ForEach-Object {
-            if (-not (Test-Path "dist\$($_.Name)")) { Copy-Item $_.FullName dist\ }
-          }
+          # QMYSQL was built from matching Qt sources against the same MySQL client
+          # staged above. A prebuilt plugin can require newer libmysql entry points.
+          if (-not (Test-Path 'dist\sqldrivers\qsqlmysql.dll')) { throw 'Built QMYSQL plugin missing.' }
 
           # Scan every Qt executable together, including Assistant. Let windeployqt
           # collect image plugins and their dependencies instead of copying DLLs by hand.

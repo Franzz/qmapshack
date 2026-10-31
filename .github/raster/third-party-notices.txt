@@ -34,7 +34,9 @@ GDAL: https://gdal.org/
 PROJ: https://proj.org/
 Routino: https://www.routino.org/
 JPEG: https://www.ijg.org/
-Qt MySQL driver: https://github.com/thecodemonkey86/qt_mysql_driver/
+Qt MySQL driver: built from the matching Qt sources against the GISInternals
+MySQL client. Source revision, download hash and Qt license files are under
+licenses/qt-mysql/. Sources: https://github.com/qt/qtbase/
 
 The GISInternals runtime also includes dependencies used by raster plugins
 (including KEA/HDF5, PDF/Poppler, WebP, PNG, JPEG, TIFF, SQLite, zlib and

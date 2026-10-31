@@ -1,0 +1,9 @@
+{
+  "qt_version": "6.12.0",
+  "qtbase_revision": "025bdad181de241e81bf853c8a2d7bf3d19261a9",
+  "source": {
+    "name": "qtbase-025bdad181de241e81bf853c8a2d7bf3d19261a9.zip",
+    "url": "https://codeload.github.com/qt/qtbase/zip/025bdad181de241e81bf853c8a2d7bf3d19261a9",
+    "sha256": "2bbbdbbcff5d498b81cf8d0bd3db2aa018391bd981be897220e4d79c83c924a1"
+  }
+}

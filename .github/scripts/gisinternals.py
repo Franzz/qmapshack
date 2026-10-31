@@ -53,8 +53,9 @@ def fetch(root, cache, lock):
         path = verified_download(archive["url"], cache / archive["name"], archive["sha256"])
         extract(path, root)
     for name in ("include/gdal.h", "include/proj9/proj.h", "include/jpeglib.h",
-                 "lib/gdal_i.lib", "lib/proj9.lib", "lib/libjpeg.lib",
-                 "bin/gdal.dll", "bin/proj_9.dll", "bin/proj9/share/proj.db"):
+                 "include/mysql.h", "include/mysql_version.h",
+                 "lib/gdal_i.lib", "lib/proj9.lib", "lib/libjpeg.lib", "lib/libmysql.lib",
+                 "bin/gdal.dll", "bin/proj_9.dll", "bin/libmysql.dll", "bin/proj9/share/proj.db"):
         if not (root / name).is_file():
             raise RuntimeError(f"GISInternals SDK is incomplete: {name}")
     for name in lock["plugins"]:
@@ -80,7 +81,8 @@ def stage(root, destination, lock):
     modules = {path.name.lower(): path for path in (root / "bin").glob("*.dll")}
     system = Path(os.environ["SystemRoot"]) / "System32"
     roots = [(root / "bin/gdal.dll", destination / "gdal.dll"),
-             (root / "bin/proj_9.dll", destination / "proj_9.dll")]
+             (root / "bin/proj_9.dll", destination / "proj_9.dll"),
+             (root / "bin/libmysql.dll", destination / "libmysql.dll")]
     for subdirectory in ("bin/gdal/apps", "bin/proj9/apps"):
         roots.extend((path, destination / path.name) for path in (root / subdirectory).glob("*.exe"))
     roots.extend((root / "bin/gdal/plugins" / name, plugin_dir / name) for name in lock["plugins"])
