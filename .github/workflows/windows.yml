@@ -151,10 +151,20 @@ jobs:
       # Use the separately released WebEngine 6.140 package instead.
       - name: Install Qt WebEngine 6.140
         run: |
-          $webEngineRepo = 'https://download.qt.io/online/qtsdkrepository/windows_x86/extensions/qtwebengine/6120/61400/msvc2022_64/extensions.qtwebengine.6120.61400.win64_msvc2022_64'
-          $webEngineArchive = '6.12.0-0-202609281005qtwebengine-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z'
+          $webEngineRepo = 'https://download.qt.io/online/qtsdkrepository/windows_x86/extensions/qtwebengine/6120/61400/msvc2022_64'
+          $webEnginePackage = 'extensions.qtwebengine.6120.61400.win64_msvc2022_64'
+          # Qt can republish this package with a new timestamp in the archive name.
+          [xml]$metadata = (Invoke-WebRequest "$webEngineRepo/Updates.xml").Content
+          $package = @($metadata.Updates.PackageUpdate | Where-Object Name -eq $webEnginePackage)
+          if ($package.Count -ne 1) { throw "Expected one Qt WebEngine package: $webEnginePackage" }
+          $webEngineArchives = @($package.DownloadableArchives -split ',' |
+            ForEach-Object { $_.Trim() } | Where-Object { $_ -like 'qtwebengine-*.7z' })
+          if ($webEngineArchives.Count -ne 1 -or -not $package.Version) {
+            throw 'Expected one Qt WebEngine runtime archive and its version in Updates.xml.'
+          }
+          $webEngineArchive = "$($package.Version)$($webEngineArchives[0])"
           $archive = Join-Path $env:RUNNER_TEMP 'qtwebengine-6.140.0.7z'
-          Invoke-WebRequest "$webEngineRepo/$webEngineArchive" -OutFile $archive
+          Invoke-WebRequest "$webEngineRepo/$webEnginePackage/$webEngineArchive" -OutFile $archive
           python -m py7zr x $archive $env:QT_ROOT_DIR
           if ($LASTEXITCODE -ne 0) { throw 'Could not extract Qt WebEngine 6.140.' }
 
