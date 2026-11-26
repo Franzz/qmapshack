@@ -130,6 +130,36 @@ class ReleaseTests(unittest.TestCase):
         self.assertTrue((self.worker / "installer.txt").exists())
         self.assertEqual((self.worker / "app.txt").read_text(), "new upstream version\n")
 
+    def test_sync_handles_legacy_crlf_blobs_on_fork_master(self):
+        self.git("switch", "master", cwd=self.seed)
+        script = self.seed / "msvc_64/build_routino.bat"
+        script.parent.mkdir()
+        script.write_bytes(b"@echo off\r\necho Routino\r\n")
+        self.git("-c", "core.autocrlf=false", "add", ".", cwd=self.seed)
+        self.git("commit", "-m", "Add legacy CRLF batch file", cwd=self.seed)
+        (self.seed / ".gitattributes").write_text("*.bat text eol=crlf\n")
+        self.git("add", ".gitattributes", cwd=self.seed)
+        self.git("commit", "-m", "Specify batch file line endings without renormalizing",
+                 cwd=self.seed)
+        self.git("push", str(self.origin), "master", cwd=self.seed)
+        self.git("switch", "--discard-changes", "build", cwd=self.seed)
+        self.git("merge", "--no-edit", "master", cwd=self.seed)
+        self.git("add", "--renormalize", ".", cwd=self.seed)
+        self.commit("Normalize batch file on build")
+        self.git("push", str(self.origin), "build", cwd=self.seed)
+        self.git("fetch", "origin", cwd=self.worker)
+        self.git("switch", "-C", "build", "origin/build", cwd=self.worker)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+
+        # Upstream fixes its stored line endings in the new release too.
+        upstream_sha = self.new_release()
+        release.prepare("test/fork")
+
+        self.assertEqual(self.remote_sha("master"), upstream_sha)
+        self.assertEqual(self.remote_sha("build"), self.values()["build_sha"])
+        self.assertTrue((self.worker / "installer.txt").exists())
+        self.assertEqual(self.git("status", "--porcelain"), "")
+
     def test_fast_forward_sync_creates_a_merge_commit_that_skips_duplicate_ci(self):
         self.git("push", str(self.origin), "+master:build", cwd=self.seed)
         old_build = self.remote_sha("build")

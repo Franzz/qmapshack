@@ -134,17 +134,17 @@ def prepare(repository, rebuild=False):
     master_sha = run("git", "rev-parse", "refs/remotes/upstream/master")
     run("git", "merge-base", "--is-ancestor", upstream_sha, master_sha)
 
-    run("git", "switch", "-C", "master", "refs/remotes/origin/master")
-    run("git", "merge", "--ff-only", "refs/remotes/upstream/master")
-    if run("git", "rev-parse", "HEAD") != master_sha:
+    fork_master_sha = run("git", "rev-parse", "refs/remotes/origin/master")
+    if run("git", "merge-base", fork_master_sha, master_sha) != fork_master_sha:
         raise RuntimeError("Fork master has its own commits; it must remain an upstream mirror.")
     # Update master first, even if merging it into build subsequently conflicts.
-    run("git", "push", "origin", "refs/heads/master:refs/heads/master")
+    # Avoid checking out upstream's legacy CRLF blobs, which can appear locally modified.
+    run("git", "push", "origin", "refs/remotes/upstream/master:refs/heads/master")
     run("git", "switch", "-C", "build", "refs/remotes/origin/build")
     try:
         # A sync-token push can trigger CI; this workflow already builds the result.
         run("git", "merge", "--no-ff", "-m", "Merge upstream master into build [skip ci]",
-            "refs/heads/master")
+            "refs/remotes/upstream/master")
     except subprocess.CalledProcessError:
         conflicts = run("git", "diff", "--name-only", "--diff-filter=U")
         run("git", "merge", "--abort")
