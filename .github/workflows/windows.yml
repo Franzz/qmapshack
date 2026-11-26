@@ -414,6 +414,20 @@ jobs:
           & $makensis /V3 "/DPROJECT_ROOT=$env:GITHUB_WORKSPACE" "/DINSTALLER_NAME=$env:INSTALLER_NAME" msvc_64\QMapShack_CI_Installer.nsi
           if ($LASTEXITCODE -ne 0) { throw "NSIS failed to build the installer" }
 
+      - name: Smoke test Windows installer
+        env:
+          INSTALLER_NAME: ${{ steps.installer-name.outputs.asset_name }}
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP 'qmapshack-install-test'
+          $installer = Join-Path $env:GITHUB_WORKSPACE $env:INSTALLER_NAME
+          $process = Start-Process $installer -ArgumentList '/S', "/D=$installDir" -PassThru
+          if (-not $process.WaitForExit(120000)) {
+            $process.Kill()
+            throw 'QMapShack installer did not finish within two minutes.'
+          }
+          if ($process.ExitCode -ne 0) { throw "QMapShack installer failed with exit code $($process.ExitCode)." }
+          if (-not (Test-Path "$installDir\qmapshack.exe")) { throw 'QMapShack installer did not install the application.' }
+
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.release.outputs.release_tag }}

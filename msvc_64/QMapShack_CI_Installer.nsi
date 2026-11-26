@@ -2,6 +2,8 @@ Unicode true
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
+!include "FileFunc.nsh"
+!include "WordFunc.nsh"
 
 !define APP_NAME "QMapShack"
 !define APP_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\QMapShack"
@@ -42,8 +44,28 @@ Section "-Visual C++ runtime"
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
   File "${PROJECT_ROOT}\dist\vc_redist.x64.exe"
+
+  ; Avoid running the redistributable again when a suitable x64 runtime exists.
+  ReadRegDWORD $0 HKLM "Software\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Installed"
+  ${If} $0 == 1
+    ReadRegStr $1 HKLM "Software\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Version"
+    StrCpy $1 $1 "" 1 ; remove the leading 'v'
+    ${GetFileVersion} "$PLUGINSDIR\vc_redist.x64.exe" $2
+    ${IfNot} ${Errors}
+      ${VersionCompare} $1 $2 $0
+      ${If} $0 != 2
+        DetailPrint "Visual C++ x64 runtime $1 is already installed."
+        Goto runtime_done
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
+  StrCpy $1 "/passive"
+  IfSilent 0 +2
+    StrCpy $1 "/quiet"
+  DetailPrint "Visual C++ runtime log: $TEMP\QMapShack-vc_redist.x64.log"
   ClearErrors
-  ExecWait '"$PLUGINSDIR\vc_redist.x64.exe" /install /quiet /norestart' $0
+  ExecWait '"$PLUGINSDIR\vc_redist.x64.exe" /install $1 /norestart /log "$TEMP\QMapShack-vc_redist.x64.log"' $0
   IfErrors runtime_failed
   ${If} $0 == 3010
     SetRebootFlag true
@@ -53,7 +75,7 @@ Section "-Visual C++ runtime"
   ${EndIf}
   Goto runtime_done
 runtime_failed:
-  MessageBox MB_OK|MB_ICONSTOP "Could not install the Visual C++ runtime (error $0)."
+  MessageBox MB_OK|MB_ICONSTOP "Could not install the Visual C++ runtime (error $0). See $TEMP\QMapShack-vc_redist.x64.log."
   SetErrorLevel 1
   Abort
 runtime_done:
