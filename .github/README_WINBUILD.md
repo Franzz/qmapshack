@@ -8,10 +8,20 @@ come from upstream. Keep changes to upstream-maintained files to a minimum to
 reduce merge conflicts when synchronizing future releases.
 
 Set the fork's default branch to `build` and enable GitHub Actions for the fork.
-GitHub schedules workflows only from the default branch. The workflow uses the
-repository's `GITHUB_TOKEN` with `contents: write`; it does not need a personal
-access token. Branch rules must allow GitHub Actions to push to `master` and
-`build` and create release tags.
+GitHub schedules workflows only from the default branch.
+
+Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new)
+with access only to this fork and repository permissions **Contents: Read and
+write** and **Workflows: Read and write**. Save it as the repository Actions
+secret `UPSTREAM_SYNC_TOKEN` under **Settings > Secrets and variables > Actions**.
+The prepare job uses it for checkout and Git pushes to `master` and `build`,
+because upstream changes can include workflow files. The built-in `GITHUB_TOKEN`
+cannot push those changes, and its YAML `permissions` cannot grant workflow
+write access. Renew the secret before the token expires.
+
+The Windows build still uses `GITHUB_TOKEN` with `contents: write` for build tags
+and releases. Branch rules must allow the sync token's owner to push to `master`
+and `build`, and GitHub Actions to create release tags.
 
 GitHub [automatically disables scheduled workflows in public repositories after
 60 days without repository activity](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
@@ -70,8 +80,11 @@ it to rebuild the latest upstream release even when an installer already
 exists; the build uses the next number for that version.
 
 The merge and Windows build run as dependent jobs in the same workflow. They
-do not rely on a push by `GITHUB_TOKEN` triggering another workflow. Automated
-merge pushes use `GITHUB_TOKEN`, so they do not trigger a second build run.
+do not rely on the synchronization push triggering another workflow. Sync-token
+pushes can trigger workflows, so automated merges into `build` create a merge
+commit with `[skip ci]` to prevent a duplicate Windows build. The current run
+continues with the merged commit. The fork's `master` remains an exact upstream
+mirror.
 
 ## Email and GitHub notifications
 

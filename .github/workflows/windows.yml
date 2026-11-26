@@ -41,6 +41,7 @@ jobs:
         with:
           ref: build
           fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
 
       - name: Check upstream release and merge master into build
         id: upstream

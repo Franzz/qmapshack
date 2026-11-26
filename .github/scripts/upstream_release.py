@@ -142,7 +142,9 @@ def prepare(repository, rebuild=False):
     run("git", "push", "origin", "refs/heads/master:refs/heads/master")
     run("git", "switch", "-C", "build", "refs/remotes/origin/build")
     try:
-        run("git", "merge", "--no-edit", "refs/heads/master")
+        # A sync-token push can trigger CI; this workflow already builds the result.
+        run("git", "merge", "--no-ff", "-m", "Merge upstream master into build [skip ci]",
+            "refs/heads/master")
     except subprocess.CalledProcessError:
         conflicts = run("git", "diff", "--name-only", "--diff-filter=U")
         run("git", "merge", "--abort")

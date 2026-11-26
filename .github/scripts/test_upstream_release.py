@@ -84,6 +84,9 @@ class ReleaseTests(unittest.TestCase):
     def new_release(self):
         self.git("switch", "master", cwd=self.seed)
         (self.seed / "app.txt").write_text("new upstream version\n")
+        workflow = self.seed / ".github/workflows/docs-check.yml"
+        workflow.parent.mkdir(parents=True, exist_ok=True)
+        workflow.write_text("name: Upstream docs check\non: push\njobs: {}\n")
         self.commit("New upstream release")
         self.tag = "V_1.22.0"
         self.git("tag", self.tag, cwd=self.seed)
@@ -119,8 +122,24 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(self.remote_sha("build"), self.values()["build_sha"])
         self.assertEqual(self.git("show", "-s", "--format=%P", "HEAD").split(),
                          [old_build, upstream_sha])
+        self.assertIn("[skip ci]", self.git("log", "-1", "--format=%B"))
+        workflow = ".github/workflows/docs-check.yml"
+        for branch in ("master", "build"):
+            self.assertEqual(self.git("show", f"{branch}:{workflow}", cwd=self.origin),
+                             (self.seed / workflow).read_text().strip())
         self.assertTrue((self.worker / "installer.txt").exists())
         self.assertEqual((self.worker / "app.txt").read_text(), "new upstream version\n")
+
+    def test_fast_forward_sync_creates_a_merge_commit_that_skips_duplicate_ci(self):
+        self.git("push", str(self.origin), "+master:build", cwd=self.seed)
+        old_build = self.remote_sha("build")
+        upstream_sha = self.new_release()
+        release.prepare("test/fork")
+        self.assertEqual(self.git("show", "-s", "--format=%P", "HEAD").split(),
+                         [old_build, upstream_sha])
+        self.assertIn("[skip ci]", self.git("log", "-1", "--format=%B"))
+        self.assertEqual(self.remote_sha("master"), upstream_sha)
+        self.assertEqual(self.remote_sha("build"), self.values()["build_sha"])
 
     def test_conflict_updates_only_master_and_blocks_build(self):
         (self.seed / "app.txt").write_text("conflicting build customization\n")
