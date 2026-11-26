@@ -23,6 +23,7 @@
 
 #include "CMainWindow.h"
 #include "canvas/CCanvas.h"
+#include "helpers/CFolderWatcher.h"
 #include "helpers/CSettings.h"
 #include "map/CMapItem.h"
 #include "map/CMapList.h"
@@ -36,8 +37,21 @@
 
 QList<CMapDraw*> CMapDraw::maps;
 QString CMapDraw::cachePath = "";
+bool CMapDraw::cacheRootPinned = false;
 QStringList CMapDraw::mapPaths;
 QStringList CMapDraw::supportedFormats = QString("*.vrt|*.jnx|*.img|*.rmap|*.wmts|*.tms|*.gemf").split('|');
+
+namespace {
+/** @brief Watch the map folders; a map file added, removed or replaced there reloads the maps of all views */
+void watchMapPaths(const QStringList& paths) {
+  static CFolderWatcher* watcher = nullptr;
+  if (watcher == nullptr) {
+    watcher = new CFolderWatcher(CMapDraw::getSupportedFormats(), qApp);
+    QObject::connect(watcher, &CFolderWatcher::sigChanged, qApp, &CMapDraw::reloadMaps);
+  }
+  watcher->setPaths(paths);
+}
+}  // namespace
 
 CMapDraw::CMapDraw(CCanvas* parent) : IDrawContext("map", CCanvas::eRedrawMap, parent) {
   // sigOverviewAdvisory crosses threads (emitted from the render thread); QPointer<CMapVRT>
@@ -105,11 +119,19 @@ void CMapDraw::setupMapPath(const QString& path) {
 void CMapDraw::setupMapPath(const QStringList& paths) {
   qDebug() << "CMapDraw::setupMapPath(paths)";
   mapPaths = paths;
+  watchMapPaths(mapPaths);
 
   for (CMapDraw* map : std::as_const(maps)) {
     map->saveMapList();
     map->loadMapList();
   }
+}
+
+void CMapDraw::reloadMaps() {
+  for (CMapDraw* map : std::as_const(maps)) {
+    map->mapList->resetDelegate();
+  }
+  setupMapPath(mapPaths);
 }
 
 void CMapDraw::saveMapPath(QSettings& cfg) {
@@ -121,7 +143,10 @@ void CMapDraw::saveMapPath(QSettings& cfg) {
 void CMapDraw::loadMapPath(QSettings& cfg) {
   qDebug() << "CMapDraw::loadMapPath(cfg)";
   mapPaths = cfg.value("mapPath", mapPaths).toStringList();
-  cachePath = cfg.value("cachePath", cachePath).toString();
+  watchMapPaths(mapPaths);
+  if (!cacheRootPinned) {
+    cachePath = cfg.value("cachePath", cachePath).toString();
+  }
 
   if (cachePath.isEmpty()) {
     cachePath = IAppSetup::getPlatformInstance()->defaultCachePath();
@@ -405,6 +430,27 @@ void CMapDraw::reportStatusToCanvas(const QString& key, const QString& msg) {
   if (canvas) {
     canvas->reportStatus(key, msg);
   }
+}
+
+qint32 CMapDraw::pendingTiles() { return sumOverActiveMaps(&IMap::pendingTiles); }
+
+qint32 CMapDraw::failedTiles() { return sumOverActiveMaps(&IMap::failedTiles); }
+
+qint32 CMapDraw::sumOverActiveMaps(qint32 (IMap::*count)()) {
+  qint32 sum = 0;
+  QMutexLocker lock(&CMapItem::mutexActiveMaps);
+  if (mapList) {
+    for (int i = 0; i < mapList->count(); i++) {
+      CMapItem* item = mapList->item(i);
+
+      if (!item || !item->isActivated()) {
+        continue;
+      }
+
+      sum += (item->getMapfile().data()->*count)();
+    }
+  }
+  return sum;
 }
 
 void CMapDraw::drawt(IDrawContext::buffer_t& currentBuffer) /* override */

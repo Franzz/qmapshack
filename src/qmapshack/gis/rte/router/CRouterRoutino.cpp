@@ -27,12 +27,12 @@
 #include "gis/CGisWorkspace.h"
 #include "gis/proj_x.h"
 #include "gis/rte/CGisItemRte.h"
+#include "gis/rte/router/CRouterSetup.h"
 #include "gis/rte/router/routino/CRouterRoutinoPathSetup.h"
 #include "helpers/CProgressDialog.h"
 #include "helpers/CSettings.h"
 #include "misc.h"
 #include "setup/IAppSetup.h"
-#include "svgticon/CSvgtIcon.h"
 
 QPointer<CProgressDialog> CRouterRoutino::progress;
 
@@ -51,14 +51,18 @@ CRouterRoutino* CRouterRoutino::pSelf = nullptr;
 CRouterRoutino::CRouterRoutino(QWidget* parent) : IRouter(true, parent) {
   pSelf = this;
   setupUi(this);
-  CSvgtIcon::load(label_3, "://icons/Help.svgt");
 
   const QFontMetrics& fm(comboDatabase->fontMetrics());
   int minWidth = fm.boundingRect(QString("A").repeated(16)).width();
   comboDatabase->setMinimumWidth(minWidth);
 
-  connect(labelHelp, &QLabel::linkActivated, &CMainWindow::self(),
-          static_cast<void (CMainWindow::*)(const QString&)>(&CMainWindow::slotLinkActivated));
+  connect(labelHelp, &QLabel::linkActivated, this, [this](const QString& link) {
+    if (link == "RoutinoFolders") {
+      slotSetupPaths();
+    } else {
+      CMainWindow::self().slotLinkActivated(link);
+    }
+  });
 
   if (Routino_CheckAPIVersion() != ROUTINO_ERROR_NONE) {
     QMessageBox::warning(
@@ -103,6 +107,9 @@ CRouterRoutino::CRouterRoutino(QWidget* parent) : IRouter(true, parent) {
   comboLanguage->addItem(tr("Slovak"), "sk");
 
   connect(toolSetupPaths, &QToolButton::clicked, this, &CRouterRoutino::slotSetupPaths);
+  connect(pushSurface, &QPushButton::clicked, &CMainWindow::self(), &CMainWindow::slotCreateSurfaceDatabase);
+
+  connect(&folderWatcher, &CFolderWatcher::sigChanged, this, &CRouterRoutino::reloadDatabases);
 
   SETTINGS;
   dbPaths = cfg.value("Route/routino/paths", dbPaths).toStringList();
@@ -210,21 +217,37 @@ void CRouterRoutino::setupPath(const QString& path) {
   }
 
   dbPaths << cleanPath(path);
+  reloadDatabases();
+}
+
+void CRouterRoutino::setPaths(const QStringList& paths) {
+  dbPaths = paths;
+  reloadDatabases();
+}
+
+void CRouterRoutino::reloadDatabases() {
+  // Busy: a route calculation uses the databases, or a rebuild waits in one of its message boxes.
+  if (!mutex.tryLock()) {
+    QTimer::singleShot(1000, this, &CRouterRoutino::reloadDatabases);
+    return;
+  }
   buildDatabaseList();
   updateHelpText();
+  mutex.unlock();
+  CRouterSetup::self().updateFastRouting();
 }
 
 void CRouterRoutino::slotSetupPaths() {
   CRouterRoutinoPathSetup dlg(dbPaths);
   dlg.exec();
-
-  buildDatabaseList();
-  updateHelpText();
+  reloadDatabases();
 }
 
 void CRouterRoutino::buildDatabaseList() {
   static const QRegularExpression re(QRegularExpression::anchoredPattern("(.*)-segments.mem"));
+  const QString selected = comboDatabase->currentText();
   freeDatabaseList();
+  folderWatcher.setPaths(dbPaths);
 
   // initialise
   currentProfilesPath = "";
@@ -241,6 +264,11 @@ void CRouterRoutino::buildDatabaseList() {
       if (match.hasMatch()) {
         prefix = match.captured(1);
       } else {
+        continue;
+      }
+      // skip a database still missing files
+      if (!dir.exists(prefix + "-nodes.mem") || !dir.exists(prefix + "-ways.mem") ||
+          !dir.exists(prefix + "-relations.mem")) {
         continue;
       }
 
@@ -298,6 +326,11 @@ void CRouterRoutino::buildDatabaseList() {
     }
   }
   currentProfilesPath = "";
+
+  const qint32 index = comboDatabase->findText(selected);
+  if (index >= 0) {
+    comboDatabase->setCurrentIndex(index);
+  }
 }
 
 void CRouterRoutino::freeDatabaseList() {

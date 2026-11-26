@@ -1494,8 +1494,10 @@
         <file alias="icons/CSrcSlope.svgt">../icons/CSrcSlope.svg</file>
         <file alias="icons/CSrcSolid.svgt">../icons/CSrcSolid.svg</file>
         <file alias="icons/CSrcSpeed.svgt">../icons/CSrcSpeed.svg</file>
+        <file alias="icons/CSrcSurface.svgt">../icons/CSrcSurface.svg</file>
         <file alias="icons/CSrcUnknown.svgt">../icons/CSrcUnknown.svg</file>
         <file alias="icons/CSrcVertSpeed.svgt">../icons/CSrcVertSpeed.svg</file>
+        <file alias="icons/CSrcWayType.svgt">../icons/CSrcWayType.svg</file>
         <file alias="icons/CSrcWTemp.svgt">../icons/CSrcWTemp.svg</file>
         <file alias="icons/Cancel.svgt">../icons/Cancel.svg</file>
         <file alias="icons/Check.svgt">../icons/Check.svg</file>
@@ -1553,6 +1555,7 @@
         <file alias="icons/GridSetup.svgt">../icons/GridSetup.svg</file>
         <file alias="icons/GridWizard.svgt">../icons/GridWizard.svg</file>
         <file alias="icons/Help.svgt">../icons/Help.svg</file>
+        <file alias="icons/HelpHint.svgt">../icons/HelpHint.svg</file>
         <file alias="icons/Hint.svgt">../icons/Hint.svg</file>
         <file alias="icons/I.svgt">../icons/I.svg</file>
         <file alias="icons/IconSize.svgt">../icons/IconSize.svg</file>

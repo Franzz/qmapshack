@@ -52,6 +52,10 @@
 
 /// Maximum map scale [m/px] at which street / way names are still drawn.
 constexpr qreal kStreetNameThreshold = 5.0;
+/// Largest bend [deg] between two segments a street name may follow.
+constexpr qreal kLabelMaxBend = 30.0;
+/// Street names this close [deg] to vertical keep the direction of their line; all others read left to right.
+constexpr qreal kLabelVertical = 10.0;
 
 int CFileExt::cnt = 0;
 
@@ -139,6 +143,77 @@ static inline bool isCluttered(QVector<QRectF>& rectPois, const QRectF& rect) {
   }
   rectPois << rect;
   return false;
+}
+
+/**
+   @brief Find the longest stretch of a line without a bend over kLabelMaxBend
+
+   Segments shorter than 1 px are taken along without testing their direction.
+
+   @param line     the line in screen pixels
+   @param stretch  receives the stretch's points
+   @return the stretch's length, 0 if the line has no segment
+ */
+static qreal longestStraightStretch(const QPolygonF& line, QPolygonF& stretch) {
+  qreal bestLength = 0;
+  int bestFirst = 0;
+  int bestLast = 0;
+
+  int first = 0;
+  qreal length = 0;
+  qreal lastAngle = 0;
+  bool hasAngle = false;
+
+  for (int i = 0; i + 1 < line.size(); ++i) {
+    const QLineF segment(line[i], line[i + 1]);
+    const qreal segLength = segment.length();
+
+    if (segLength >= 1.0) {
+      const qreal angle = segment.angle();
+      qreal bend = qAbs(angle - lastAngle);
+      if (bend > 180) {
+        bend = 360 - bend;
+      }
+      if (hasAngle && bend > kLabelMaxBend) {
+        first = i;
+        length = 0;
+      }
+      lastAngle = angle;
+      hasAngle = true;
+    }
+
+    length += segLength;
+    if (length > bestLength) {
+      bestLength = length;
+      bestFirst = first;
+      bestLast = i + 1;
+    }
+  }
+
+  stretch = line.mid(bestFirst, bestLast - bestFirst + 1);
+  return bestLength;
+}
+
+/**
+   @brief The area a label covers along a line
+
+   @param path    the line the label follows
+   @param from    start of the label as a fraction of the line's length
+   @param to      end of the label as a fraction of the line's length
+   @param height  the text height
+   @return the label's section of the line, widened to the text height
+ */
+static QPainterPath labelOutline(const QPainterPath& path, qreal from, qreal to, qreal height) {
+  QPainterPath section(path.pointAtPercent(from));
+  const int steps = 8;
+  for (int i = 1; i <= steps; ++i) {
+    section.lineTo(path.pointAtPercent(from + (to - from) * i / steps));
+  }
+
+  QPainterPathStroker stroker;
+  stroker.setWidth(height);
+  stroker.setCapStyle(Qt::FlatCap);
+  return stroker.createStroke(section);
 }
 
 namespace {
@@ -1914,127 +1989,142 @@ void CMapIMG::drawPolylines(BLContext& ctx, polytype_t& lines, const QPointF& sc
     dict[lines[i].type].push_back(i);
   }
 
-  QMap<quint32, CGarminTyp::polyline_property>::iterator props = polylineProperties.begin();
-  QMap<quint32, CGarminTyp::polyline_property>::iterator end = polylineProperties.end();
-  for (; props != end; ++props) {
-    const quint32& type = props.key();
-    const CGarminTyp::polyline_property& property = props.value();
-
-    const auto it = dict.constFind(type);
-    if (it == dict.constEnd()) {
-      continue;
-    }
-    const QList<quint32>& indices = *it;
-
-    if (property.hasPixmap) {
-      const BLImage& pixmap = night ? property.imgNight : property.imgDay;
-      const qreal h = pixmap.height();
-
-      for (quint32 idx : indices) {
-        CGarminPolygon& item = lines[idx];
-        QPolygonF& poly = item.pixel;
-        const int size = poly.size();
-
-        if (size < 2) {
-          continue;
-        }
-
-        map->convertRad2Px(poly);
-
-        lengths.resize(0);
-        lengths.reserve(size);
-
-        qreal u1 = poly[0].x();
-        qreal v1 = poly[0].y();
-        for (int i = 1; i < size; ++i) {
-          qreal u2 = poly[i].x();
-          qreal v2 = poly[i].y();
-
-          qreal segLength = qSqrt((u2 - u1) * (u2 - u1) + (v2 - v1) * (v2 - v1));
-          lengths << segLength;
-
-          u1 = u2;
-          v1 = v2;
-        }
-
-        if (scale.x() < kStreetNameThreshold && property.labelType != CGarminTyp::eNone) {
-          QFont f(font);
-          switch (property.labelType) {
-            case CGarminTyp::eSmall:
-              f.setPointSize(font.pointSize() - 2);
-              break;
-            case CGarminTyp::eLarge:
-              f.setPointSize(font.pointSize() + 2);
-              break;
-            default:;
-          }
-
-          collectText(item, poly, f, h, night ? property.colorLabelNight : property.colorLabelDay);
-        }
-
-        // Lay the pixmap along each straight segment of the polyline. The arc-length
-        // breakpoints used to coincide with the polyline vertices, so we can index
-        // the vertices directly instead of re-walking a QPainterPath.
-        for (int i = 0; i + 1 < size; ++i) {
-          const qreal segLength = lengths.at(i);
-          if (segLength < 1.0) {
-            continue;
-          }
-
-          const QPointF& p1 = poly[i];
-          const QPointF& p2 = poly[i + 1];
-          const double angle = std::atan2(p2.y() - p1.y(), p2.x() - p1.x());
-
-          const BLImage seg = img2line(pixmap, static_cast<int>(segLength));
-          if (seg.is_empty()) {
-            continue;
-          }
-
-          ctx.save();
-          ctx.translate(p1.x(), p1.y());
-          ctx.rotate(angle);
-          ctx.blit_image(BLPoint(0.0, -h / 2.0), seg);
-          ctx.restore();
-        }
+  auto drawTypes = [&](const QList<quint32>& types) {
+    for (quint32 type : types) {
+      const auto prop = polylineProperties.constFind(type);
+      if (prop == polylineProperties.constEnd()) {
+        continue;
       }
-    } else {
-      // First run: the background (border) line for bordered types, otherwise the
-      // line itself. Either way the labels are collected here.
-      const QPen& pen = property.hasBorder ? (night ? property.penBorderNight : property.penBorderDay)
-                                           : (night ? property.penLineNight : property.penLineDay);
-      const bool stroke = applyPen(ctx, pen);
-      const int lineWidth = pen.width();
+      const CGarminTyp::polyline_property& property = *prop;
 
-      for (quint32 idx : indices) {
-        drawLine(ctx, lines[idx], stroke, lineWidth, property, font, scale);
+      const auto it = dict.constFind(type);
+      if (it == dict.constEnd()) {
+        continue;
       }
-    }
-  }
+      const QList<quint32>& indices = *it;
 
-  // 2nd run to draw the foreground lines over their borders.
-  for (props = polylineProperties.begin(); props != end; ++props) {
-    const quint32& type = props.key();
-    const CGarminTyp::polyline_property& property = props.value();
+      if (property.hasPixmap) {
+        const BLImage& pixmap = night ? property.imgNight : property.imgDay;
+        const qreal h = pixmap.height();
 
-    const auto it = dict.constFind(type);
-    if (it == dict.constEnd()) {
-      continue;
-    }
-    const QList<quint32>& indices = *it;
-
-    if (property.hasBorder && !property.hasPixmap) {
-      const QPen& pen = night ? property.penLineNight : property.penLineDay;
-      if (applyPen(ctx, pen)) {
         for (quint32 idx : indices) {
-          drawLine(ctx, lines[idx]);
+          CGarminPolygon& item = lines[idx];
+          QPolygonF& poly = item.pixel;
+          const int size = poly.size();
+
+          if (size < 2) {
+            continue;
+          }
+
+          map->convertRad2Px(poly);
+
+          lengths.resize(0);
+          lengths.reserve(size);
+
+          qreal u1 = poly[0].x();
+          qreal v1 = poly[0].y();
+          for (int i = 1; i < size; ++i) {
+            qreal u2 = poly[i].x();
+            qreal v2 = poly[i].y();
+
+            qreal segLength = qSqrt((u2 - u1) * (u2 - u1) + (v2 - v1) * (v2 - v1));
+            lengths << segLength;
+
+            u1 = u2;
+            v1 = v2;
+          }
+
+          if (scale.x() < kStreetNameThreshold && property.labelType != CGarminTyp::eNone) {
+            QFont f(font);
+            switch (property.labelType) {
+              case CGarminTyp::eSmall:
+                f.setPointSize(font.pointSize() - 2);
+                break;
+              case CGarminTyp::eLarge:
+                f.setPointSize(font.pointSize() + 2);
+                break;
+              default:;
+            }
+
+            collectText(item, poly, f, night ? property.colorLabelNight : property.colorLabelDay);
+          }
+
+          // Lay the pixmap along each straight segment of the polyline. The arc-length
+          // breakpoints used to coincide with the polyline vertices, so we can index
+          // the vertices directly instead of re-walking a QPainterPath.
+          for (int i = 0; i + 1 < size; ++i) {
+            const qreal segLength = lengths.at(i);
+            if (segLength < 1.0) {
+              continue;
+            }
+
+            const QPointF& p1 = poly[i];
+            const QPointF& p2 = poly[i + 1];
+            const double angle = std::atan2(p2.y() - p1.y(), p2.x() - p1.x());
+
+            const BLImage seg = img2line(pixmap, static_cast<int>(segLength));
+            if (seg.is_empty()) {
+              continue;
+            }
+
+            ctx.save();
+            ctx.translate(p1.x(), p1.y());
+            ctx.rotate(angle);
+            ctx.blit_image(BLPoint(0.0, -h / 2.0), seg);
+            ctx.restore();
+          }
+        }
+      } else {
+        // First run: the background (border) line for bordered types, otherwise the
+        // line itself. Either way the labels are collected here.
+        const QPen& pen = property.hasBorder ? (night ? property.penBorderNight : property.penBorderDay)
+                                             : (night ? property.penLineNight : property.penLineDay);
+        const bool stroke = applyPen(ctx, pen);
+        for (quint32 idx : indices) {
+          drawLine(ctx, lines[idx], stroke, property, font, scale);
         }
       }
     }
-  }
+
+    // 2nd run to draw the foreground lines over their borders.
+    for (quint32 type : types) {
+      const auto prop = polylineProperties.constFind(type);
+      if (prop == polylineProperties.constEnd()) {
+        continue;
+      }
+      const CGarminTyp::polyline_property& property = *prop;
+
+      const auto it = dict.constFind(type);
+      if (it == dict.constEnd()) {
+        continue;
+      }
+      const QList<quint32>& indices = *it;
+
+      if (property.hasBorder && !property.hasPixmap) {
+        const QPen& pen = night ? property.penLineNight : property.penLineDay;
+        if (applyPen(ctx, pen)) {
+          for (quint32 idx : indices) {
+            drawLine(ctx, lines[idx]);
+          }
+        }
+      }
+    }
+  };
+
+  // Types are drawn in ascending order, 0x01-0x03 last: Garmin draws them over all other lines, and maps put
+  // overlays like cycle routes there.
+  QList<quint32> types = dict.keys();
+  std::sort(types.begin(), types.end());
+  const auto top =
+      std::stable_partition(types.begin(), types.end(), [](quint32 type) { return type < 0x01 || type > 0x03; });
+  const QList<quint32> topTypes(top, types.end());
+  types.erase(top, types.end());
+  drawTypes(types);
+  drawTypes(topTypes);
 }
 
-void CMapIMG::drawLine(BLContext& ctx, CGarminPolygon& l, bool stroke, int lineWidth,
-                       const CGarminTyp::polyline_property& property, const QFont& font, const QPointF& scale) {
+void CMapIMG::drawLine(BLContext& ctx, CGarminPolygon& l, bool stroke, const CGarminTyp::polyline_property& property,
+                       const QFont& font, const QPointF& scale) {
   QPolygonF& poly = l.pixel;
   const int size = poly.size();
 
@@ -2056,8 +2146,7 @@ void CMapIMG::drawLine(BLContext& ctx, CGarminPolygon& l, bool stroke, int lineW
       default:;
     }
 
-    collectText(l, poly, f, lineWidth,
-                CMainWindow::self().isNight() ? property.colorLabelNight : property.colorLabelDay);
+    collectText(l, poly, f, CMainWindow::self().isNight() ? property.colorLabelNight : property.colorLabelDay);
   }
 
   if (stroke) {
@@ -2074,8 +2163,7 @@ void CMapIMG::drawLine(BLContext& ctx, const CGarminPolygon& l) {
   ctx.stroke_polyline(toBLPoints(poly), static_cast<size_t>(poly.size()));
 }
 
-void CMapIMG::collectText(const CGarminPolygon& item, const QPolygonF& line, const QFont& font, qint32 lineWidth,
-                          const QColor& color) {
+void CMapIMG::collectText(const CGarminPolygon& item, const QPolygonF& line, const QFont& font, const QColor& color) {
   QString str;
   if (item.hasLabel()) {
     str = item.getLabelText();
@@ -2089,19 +2177,24 @@ void CMapIMG::collectText(const CGarminPolygon& item, const QPolygonF& line, con
   tp.polyline = line;
   tp.font = font;
   tp.text = str;
-  tp.lineWidth = lineWidth;
   tp.color = color;
 
-  const int size = line.size();
-  for (int i = 1; i < size; ++i) {
-    const QPointF& p1 = line[i - 1];
-    const QPointF& p2 = line[i];
-    qreal dx = p2.x() - p1.x();
-    qreal dy = p2.y() - p1.y();
-    tp.lengths << qSqrt(dx * dx + dy * dy);
-  }
-
   textpaths << tp;
+}
+
+bool CMapIMG::overlapsLabel(const QPainterPath& outline, const QList<QPainterPath>& placed) const {
+  const QRectF bounds = outline.boundingRect();
+  for (const strlbl_t& label : labels) {
+    if (bounds.intersects(label.rect) && outline.intersects(QRectF(label.rect))) {
+      return true;
+    }
+  }
+  for (const QPainterPath& other : placed) {
+    if (bounds.intersects(other.boundingRect()) && outline.intersects(other)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool CMapIMG::intersectsWithExistingLabel(const QRect& rect) const {
@@ -2239,83 +2332,72 @@ void CMapIMG::drawText(BLContext& ctx) {
   // the cached halo is a union of offset copies that only fills correctly under non-zero.
   ctx.set_fill_rule(BL_FILL_RULE_NON_ZERO);
 
+  // outlines of the street names placed so far
+  QList<QPainterPath> placed;
+
   for (const textpath_t& textpath : std::as_const(textpaths)) {
-    QPainterPath path;
-    QFont font = textpath.font;
-    QFontMetricsF fm(font);
-
-    path.addPolygon(textpath.polyline);
-
-    // get path length and string length
-    qreal length = qAbs(path.length());
-    qreal width = fm.size(Qt::TextSingleLine, textpath.text).width();
-
-    // adjust font size until string fits into polyline
-    while (width > (length * 0.7)) {
-      font.setPointSize(font.pointSize() - 1);
-      fm = QFontMetricsF(font);
-      width = fm.size(Qt::TextSingleLine, textpath.text).width();
-
-      if ((font.pointSize() < 6)) {
-        break;
-      }
+    const QFont& font = textpath.font;
+    const QFontMetricsF fm(font);
+    // Letters are set one by one, so the label is as wide as their advances add up to, which can be more than
+    // the advance of the whole text.
+    const QString& text = textpath.text;
+    QVector<qreal> advances;
+    advances.reserve(text.size());
+    qreal width = 0;
+    for (const QChar& c : text) {
+      advances << fm.horizontalAdvance(c);
+      width += advances.last();
     }
 
-    // no way to draw a readable string - skip
-    if ((font.pointSize() < 6)) {
+    // The label goes on the line's longest stretch without a sharp bend, or not at all.
+    QPolygonF stretch;
+    const qreal length = longestStraightStretch(textpath.polyline, stretch);
+    if (length < width) {
       continue;
     }
 
-    fm = QFontMetricsF(font);
-    // Layout still uses QFontMetricsF (above); glyph outlines are rasterised by Blend2D from
-    // QRawFont (cached across frames), keeping Qt's font matching at the same resolved size.
-    // Glyph ids for the whole label are looked up once here rather than per character.
+    QPainterPath path;
+    path.addPolygon(stretch);
+
+    // Glyph outlines are rasterised by Blend2D from QRawFont (cached across frames), keeping
+    // Qt's font matching at the same resolved size. Glyph ids are looked up once per label.
     FontGlyphs& fg = fontGlyphsFor(font);
     const QList<quint32> glyphIds = fg.raw.glyphIndexesForString(textpath.text);
     const BLRgba32 fill = toBLColor(textpath.color);
     const BLRgba32 halo = toBLColor(Qt::white);
 
-    // adjust exact offset to first half of segment
-    const QVector<qreal>& lengths = textpath.lengths;
-    const qreal ref = (length - width) / 2;
-    qreal offset = 0;
+    // vertical middle of the text on the line; glyphs sit on their baseline
+    const qreal baselineShift = (fm.ascent() - fm.descent()) / 2;
 
-    for (int i = 0; i < lengths.size(); ++i) {
-      const qreal d = lengths[i];
+    // centre the label on the stretch
+    qreal offset = (length - width) / 2;
 
-      if ((offset + d / 2) >= ref) {
-        offset = ref;
-        break;
-      }
-      if ((offset + d) >= ref) {
-        offset += d / 2;
-        break;
-      }
-      offset += d;
-    }
-
-    // get starting angle of first two letters
-    const QString& text = textpath.text;
-    qreal percent1 = offset / length;
-    qreal percent2 = (offset + fm.size(Qt::TextSingleLine, text.left(2)).width()) / length;
-
-    QPointF point1 = path.pointAtPercent(percent1);
-    QPointF point2 = path.pointAtPercent(percent2);
-
-    // flip path if string start is E->W direction
-    // this helps, sometimes, in 50 % of the cases :)
-    if (point2.x() - point1.x() < 0) {
+    // Read left to right; within kLabelVertical of vertical the label keeps the direction of its line. The label is
+    // centred, so reversing keeps its place.
+    QPointF point1 = path.pointAtPercent(offset / length);
+    QPointF point2 = path.pointAtPercent((offset + width) / length);
+    const qreal dx = point2.x() - point1.x();
+    const qreal dy = point2.y() - point1.y();
+    const bool vertical = qAbs(dx) <= qAbs(dy) * qTan(qDegreesToRadians(kLabelVertical));
+    if (!vertical && dx < 0) {
       path = path.toReversed();
     }
 
+    // A name that would overlap a point label or another name is dropped.
+    const QPainterPath outline = labelOutline(path, offset / length, (offset + width) / length, fm.height());
+    if (overlapsLabel(outline, placed)) {
+      continue;
+    }
+    placed << outline;
+
     // draw string letter by letter and adjust angle
     const int size = text.size();
-    percent2 = offset / length;
+    qreal percent2 = offset / length;
     point2 = path.pointAtPercent(percent2);
 
     for (int i = 0; i < size; ++i) {
       // percent1 = percent2;
-      percent2 = (offset + fm.size(Qt::TextSingleLine, text[i]).width()) / length;
+      percent2 = (offset + advances[i]) / length;
 
       point1 = point2;
       point2 = path.pointAtPercent(percent2);
@@ -2327,7 +2409,7 @@ void CMapIMG::drawText(BLContext& ctx) {
       ctx.save();
       ctx.translate(point1.x(), point1.y());
       ctx.rotate(angle);
-      ctx.translate(0, -(textpath.lineWidth + 2));
+      ctx.translate(0, baselineShift);
 
       if (i < glyphIds.size()) {
         fillGlyphRun(ctx, glyphPathsFor(fg, glyphIds[i]), BLPoint(0, 0), fill, halo);
@@ -2335,7 +2417,7 @@ void CMapIMG::drawText(BLContext& ctx) {
 
       ctx.restore();
 
-      offset += fm.size(Qt::TextSingleLine, text[i]).width();
+      offset += advances[i];
     }
   }
 }

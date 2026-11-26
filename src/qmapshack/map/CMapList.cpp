@@ -25,7 +25,6 @@
 #include "map/CMapItem.h"
 #include "map/CMapItemDelegate.h"
 #include "misc.h"
-#include "svgticon/CSvgtIcon.h"
 
 CMapTreeWidget::CMapTreeWidget(QWidget* parent) : QTreeWidget(parent) {
   CMapItemDelegate* delegate = new CMapItemDelegate(this);
@@ -100,7 +99,6 @@ void CMapTreeWidget::dropEvent(QDropEvent* e) {
 
 CMapList::CMapList(CCanvas* parent) : QWidget(parent), canvas(parent) {
   setupUi(this);
-  CSvgtIcon::load(labelIcon, "://icons/Help.svgt");
   lineFilter->addAction(actionClearFilter, QLineEdit::TrailingPosition);
 
   connect(treeWidget, &CMapTreeWidget::customContextMenuRequested, this, &CMapList::slotContextMenu);
@@ -114,7 +112,6 @@ CMapList::CMapList(CCanvas* parent) : QWidget(parent), canvas(parent) {
   connect(actionMoveDown, &QAction::triggered, this, &CMapList::slotMoveDown);
   connect(actionMoveEnd, &QAction::triggered, this, &CMapList::slotMoveEnd);
   connect(actionRemove, &QAction::triggered, this, &CMapList::slotRemove);
-  connect(actionReloadMaps, &QAction::triggered, this, &CMapList::slotReloadMaps);
   connect(actionOverviewInfo, &QAction::triggered, this, &CMapList::slotOverviewInfo);
   connect(labelHelpFillMapList, &QLabel::linkActivated, &CMainWindow::self(),
           static_cast<void (CMainWindow::*)(const QString&)>(&CMainWindow::slotLinkActivated));
@@ -130,7 +127,6 @@ CMapList::CMapList(CCanvas* parent) : QWidget(parent), canvas(parent) {
   menu->addSeparator();
   menu->addAction(actionOverviewInfo);
   menu->addSeparator();
-  menu->addAction(actionReloadMaps);
   menu->addAction(CMainWindow::self().getMapSetupAction());
   menu->setToolTipsVisible(true);
 }
@@ -177,7 +173,7 @@ void CMapList::updateHelpText() {
   labelHelpFillMapList->setVisible(!haveMaps);
 
   if (!haveMaps) {
-    labelIcon->show();
+    helpBlock->show();
     labelHelpActivateMap->hide();
   } else {
     bool showHelp = true;
@@ -192,7 +188,7 @@ void CMapList::updateHelpText() {
         showHelp = false;
       }
     }
-    labelIcon->setVisible(showHelp);
+    helpBlock->setVisible(showHelp);
     labelHelpActivateMap->setVisible(showHelp);
   }
 }
@@ -334,12 +330,11 @@ void CMapList::slotMapHonk() {
   }
 }
 
-void CMapList::slotReloadMaps() {
+void CMapList::resetDelegate() {
   CMapItemDelegate* delegate = dynamic_cast<CMapItemDelegate*>(treeWidget->itemDelegate());
   if (delegate != nullptr) {
     delegate->reset();
   }
-  CMapDraw::setupMapPath(CMapDraw::getMapPaths());
 }
 
 void CMapList::slotFilter(const QString& str) {

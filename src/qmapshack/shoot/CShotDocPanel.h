@@ -1,0 +1,183 @@
+/**********************************************************************************************
+   Copyright (C) 2026 Oliver Eichler <oliver.eichler@gmx.de>
+
+   This program is free software: you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation, either version 3 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+**********************************************************************************************/
+
+#ifndef CSHOTDOCPANEL_H
+#define CSHOTDOCPANEL_H
+
+#include <QDialog>
+#include <QHash>
+#include <QList>
+#include <QPixmap>
+#include <QString>
+#include <QStringList>
+#include <functional>
+
+#include "shoot/CShotFiles.h"
+
+class QGroupBox;
+class QLabel;
+class QListWidget;
+class QMessageBox;
+class QToolButton;
+class QTreeWidget;
+class QTreeWidgetItem;
+
+/**
+   @brief The writer's panel: the page's scenarios above, its images below.
+
+   Every button calls a handler the launcher sets; the panel itself touches no file but its own size.
+ */
+class CShotDocPanel : public QDialog {
+  Q_OBJECT
+ public:
+  /** @param sizeFile  the INI file the panel's size and position are kept in between sessions */
+  CShotDocPanel(const QString& page, const QString& sizeFile, QWidget* parent);
+
+  /** @brief Fill the scenario list; call before setShots(), whose combo boxes offer these. */
+  void setScenarios(const QStringList& names, const QString& current);
+
+  void setShots(const QList<CShotFiles::row_t>& shots);
+
+  /** @return the highlighted scenario's name, empty for (base) or none */
+  QString currentScenario() const;
+
+  /** @return the selected image's id, empty when none is selected */
+  QString currentId() const;
+
+  /** @brief Select the image @p id; no image is selected when there is no such row. */
+  void setCurrentShot(const QString& id);
+
+  /** @brief Asked before a close is accepted; false keeps the panel open, and must only follow a question. */
+  void setCloseRequestHandler(std::function<bool()> handler) { closeRequest = handler; }
+
+  void setStatus(const QString& text);
+
+  void setPage(const QString& path, bool exists);
+  /** @brief Say which fixture parts the page has itself; @p dir is its fixture folder */
+  void setFixture(const QStringList& own, const QStringList& empty, const QString& dir);
+
+  /** @brief While a recording runs, everything but Stop is disabled. */
+  void setRecording(bool on);
+
+  /**
+     @brief Refuse input while @p on, through a window-modal box.
+
+     Shown, never exec()'d: the launcher keeps answering the state process meanwhile.
+   */
+  void setBusy(bool on, const QString& what);
+
+  /** @brief The marks of image @p id, one line each, and what each shows on screen. */
+  void setMarks(const QString& id, const QStringList& names);
+  void setMarkStatuses(const QStringList& statuses);
+  /** @return the kind of the marker picked, or empty */
+  QString pickedMarker() const;
+  bool marksShown() const;
+
+ signals:
+  /** @brief An image's row was clicked; emitted queued, after the click is delivered. */
+  void shotPicked(const QString& id);
+  /** @brief A scenario was clicked; emitted queued: the answer rebuilds the list. */
+  void scenarioPicked(const QString& name);
+  void recordClicked();
+  void renameClicked();
+  void deleteScenarioClicked();
+  void storeConfigClicked();
+  void copyBaseClicked();
+  /** @brief An image's combo box changed to @p scenario, empty for `(base)`; emitted queued: the answer rebuilds the
+   * rows. */
+  void rebindRequested(const QString& id, const QString& scenario);
+  void retakeShotClicked(const QString& id);
+  void takeRegionClicked(const QString& id);
+  void revertShotClicked(const QString& id);
+  void retakePageClicked();
+  void reapClicked();
+  void publishShotClicked(const QString& id);
+  /** @brief Publish every image of the page taken again. */
+  void publishClicked();
+  /** @brief After a close was accepted. */
+  void closed();
+  /** @brief The marker Ctrl+Shift+F10 places: frame, disc, arrow, pointer, hand or resize; empty for none. */
+  void markerPicked(const QString& kind);
+  /** @brief Remove the selected image's mark at @p index. */
+  void removeMarkClicked(qint32 index);
+  void showMarksToggled(bool on);
+
+ protected:
+  /** @brief Escape does not close the panel. */
+  void reject() override;
+  void showEvent(QShowEvent* event) override;
+  void closeEvent(QCloseEvent* event) override;
+  void moveEvent(QMoveEvent* event) override;
+  void resizeEvent(QResizeEvent* event) override;
+
+ private:
+  void centreWaiting();
+  void showPreview();
+  /** @return the published and the work image side by side, captioned */
+  QPixmap comparison(const QString& before, const QString& after) const;
+  void buildScenarioCell(QTreeWidgetItem* row, const CShotFiles::row_t& entry);
+  void updateShotActions();
+  /** @brief Rename and Delete for a scenario, Base for (base), nothing while recording */
+  void updateScenarioActions();
+  static QString label(CShotFiles::state_e state);
+
+  std::function<bool()> closeRequest;
+
+  const QString sizeFile;
+
+  QListWidget* scenarios = nullptr;
+  QTreeWidget* shots = nullptr;
+  QToolButton* recordButton = nullptr;
+  QToolButton* reapButton = nullptr;
+  QToolButton* publishButton = nullptr;
+  QToolButton* publishAllButton = nullptr;
+  QToolButton* renameButton = nullptr;
+  QToolButton* deleteButton = nullptr;
+  QToolButton* baseButton = nullptr;
+  QToolButton* againButton = nullptr;
+  QToolButton* regionButton = nullptr;
+  QToolButton* revertButton = nullptr;
+  /** Disabled while a recording runs. */
+  QList<QToolButton*> whileIdle;
+  /** Every button; all share one height (newButton()). */
+  QList<QToolButton*> buttons;
+  QLabel* page = nullptr;
+  QLabel* fixture = nullptr;
+  QLabel* status = nullptr;
+  QLabel* preview = nullptr;
+  QGroupBox* imageBox = nullptr;
+  /** Kind to button; one is checked at most. */
+  QHash<QString, QToolButton*> markerButtons;
+  QToolButton* showMarksButton = nullptr;
+  QTreeWidget* marks = nullptr;
+  QToolButton* removeMarkButton = nullptr;
+  QString markedImage;
+  QStringList markNames;
+  void showMarks(const QStringList& statuses);
+
+  QStringList scenarioNames;
+  QList<CShotFiles::row_t> entries;
+  /** Set while the rows are rebuilt: a combo box set then is not the writer's choice. */
+  bool populating = false;
+  /** The window manager owns a decorated window's geometry until it is mapped; ours is applied once after show. */
+  bool placed = false;
+  bool recording = false;
+  QMessageBox* waiting = nullptr;
+};
+
+#endif  // CSHOTDOCPANEL_H

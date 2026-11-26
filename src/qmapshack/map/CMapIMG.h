@@ -167,6 +167,7 @@ class CMapIMG : public IMap {
                   bool fast, const QRectF& viewport, polytype_t& polylines, polytype_t& polygons, pointtype_t& points,
                   pointtype_t& pois);
   bool intersectsWithExistingLabel(const QRect& rect) const;
+  bool overlapsLabel(const QPainterPath& outline, const QList<QPainterPath>& placed) const;
   void addLabel(const CGarminPoint& pt, const QRect& rect, const CGarminTyp::point_property& property, bool isDay);
   void drawPolygons(BLContext& ctx, polytype_t& lines);
   void drawPolylines(BLContext& ctx, polytype_t& lines, const QPointF& scale);
@@ -177,12 +178,11 @@ class CMapIMG : public IMap {
   void drawLabels(BLContext& ctx, const QVector<strlbl_t>& lbls);
   void drawText(BLContext& ctx);
 
-  void drawLine(BLContext& ctx, CGarminPolygon& l, bool stroke, int lineWidth,
-                const CGarminTyp::polyline_property& property, const QFont& font, const QPointF& scale);
+  void drawLine(BLContext& ctx, CGarminPolygon& l, bool stroke, const CGarminTyp::polyline_property& property,
+                const QFont& font, const QPointF& scale);
   void drawLine(BLContext& ctx, const CGarminPolygon& l);
 
-  void collectText(const CGarminPolygon& item, const QPolygonF& line, const QFont& font, qint32 lineWidth,
-                   const QColor& color);
+  void collectText(const CGarminPolygon& item, const QPolygonF& line, const QFont& font, const QColor& color);
 
   void getInfoPoints(const pointtype_t& points, const QPoint& pt, QMultiMap<QString, QString>& dict) const;
   void getInfoPolylines(const QPoint& pt, QMultiMap<QString, QString>& dict) const;
@@ -477,8 +477,6 @@ class CMapIMG : public IMap {
     QPolygonF polyline;
     QString text;
     QFont font;
-    QVector<qreal> lengths;
-    qint32 lineWidth;
     QColor color;
   };
 

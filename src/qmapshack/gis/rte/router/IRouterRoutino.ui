@@ -88,6 +88,23 @@
      <item row="1" column="1">
       <widget class="QComboBox" name="comboLanguage"/>
      </item>
+     <item row="4" column="0">
+      <widget class="QLabel" name="labelSurface">
+       <property name="text">
+        <string>Surface</string>
+       </property>
+      </widget>
+     </item>
+     <item row="4" column="1">
+      <widget class="QPushButton" name="pushSurface">
+       <property name="toolTip">
+        <string>Build surface databases from the same OpenStreetMap extracts, to show the surfaces and way types of tracks.</string>
+       </property>
+       <property name="text">
+        <string>Surface databases...</string>
+       </property>
+      </widget>
+     </item>
     </layout>
    </item>
    <item>
@@ -106,43 +123,27 @@
    <item>
     <layout class="QHBoxLayout" name="horizontalLayout_2">
      <item>
-      <widget class="QFrame" name="frameHelp">
-       <property name="frameShape">
-        <enum>QFrame::NoFrame</enum>
-       </property>
-       <property name="frameShadow">
-        <enum>QFrame::Plain</enum>
-       </property>
+      <widget class="CHelpBlock" name="frameHelp">
        <layout class="QHBoxLayout" name="horizontalLayout">
         <property name="spacing">
          <number>3</number>
         </property>
         <property name="leftMargin">
-         <number>3</number>
+         <number>0</number>
         </property>
         <property name="topMargin">
-         <number>3</number>
+         <number>0</number>
         </property>
         <property name="rightMargin">
-         <number>3</number>
+         <number>0</number>
         </property>
         <property name="bottomMargin">
-         <number>3</number>
+         <number>0</number>
         </property>
-        <item>
-         <widget class="QSvgWidget" name="label_3">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
-          </property>
-         </widget>
-        </item>
         <item>
          <widget class="QLabel" name="labelHelp">
           <property name="text">
-           <string>To use offline routing you need to define paths to local routing data. Use the setup tool button to register a path. You can create your own routing data with &lt;a href='CreateRoutino'&gt;Tool-&gt;Create Routino Database&lt;/a&gt;.</string>
+           <string>To use offline routing you need paths to local routing data. Add them with the &lt;a href='RoutinoFolders'&gt;folder button next to "Database"&lt;/a&gt;. You can create your own routing data with &lt;a href='CreateRoutino'&gt;Tool-&gt;Create Routino Database&lt;/a&gt;.</string>
           </property>
           <property name="alignment">
            <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignTop</set>
@@ -161,9 +162,10 @@
  </widget>
  <customwidgets>
   <customwidget>
-   <class>QSvgWidget</class>
-   <extends>QWidget</extends>
-   <header location="global">QSvgWidget</header>
+   <class>CHelpBlock</class>
+   <extends>QFrame</extends>
+   <header>widgets/CHelpBlock.h</header>
+   <container>1</container>
   </customwidget>
  </customwidgets>
  <resources>

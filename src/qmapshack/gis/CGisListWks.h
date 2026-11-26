@@ -41,10 +41,17 @@ class CGisListWks : public QTreeWidget {
   CGisListWks(QWidget* parent);
   virtual ~CGisListWks();
 
+  /** @brief Use another workspace database than the user's own. Before CMainWindow. */
+  static void setDatabasePath(const QString& path);
+
   // enum column_e { eColumnName = 2 };
 
   void setExternalMenu(QMenu* project);
-  bool hasProject(IGisProject* project);
+  /**
+     @brief Find another project in the workspace sharing the project's key.
+     @return The colliding project or nullptr if the key is unique.
+   */
+  IGisProject* getDuplicateProject(IGisProject* project);
 
   IGisProject* getProjectByKey(const QString& key);
   CDBProject* getProjectById(quint64 id, const QString& db);
@@ -58,6 +65,9 @@ class CGisListWks : public QTreeWidget {
   void setUserFocus(const QString& key, bool yes);
 
   bool hasDeviceSupport() const { return deviceWatcher != nullptr; }
+
+  /** @return true once slotLoadWorkspace() has run, whether it restored a project or not */
+  bool isWorkspaceLoaded() const { return workspaceLoaded; }
 
  public slots:
   void slotLoadWorkspace();
@@ -140,12 +150,15 @@ class CGisListWks : public QTreeWidget {
   void migrateDB3to4();
   void migrateDB4to5();
   void setVisibilityOnMap(bool visible);
-  QAction* addSortAction(QObject* parent, QActionGroup* actionGroup, const QString& icon, const QString& text,
-                         IGisProject::sorting_folder_e mode);
+  /// @param id  the objectName: the member's name
+  QAction* addSortAction(const char* id, QObject* parent, QActionGroup* actionGroup, const QString& icon,
+                         const QString& text, IGisProject::sorting_folder_e mode);
 
+  /// @param id  the objectName: the member's name
   template <typename Func>
-  QAction* addAction(const QIcon& icon, const QString& name, QObject* parent, Func slot) {
+  QAction* addAction(const char* id, const QIcon& icon, const QString& name, QObject* parent, Func slot) {
     QAction* action = new QAction(icon, name, parent);
+    action->setObjectName(QString::fromLatin1(id));
     connect(action, &QAction::triggered, this, slot);
     return action;
   }
@@ -153,11 +166,12 @@ class CGisListWks : public QTreeWidget {
   void showMenuProjectWks(const QPoint& p);
   void showMenuProjectDev(const QPoint& p);
   void showMenuProjectTrash(const QPoint& p);
-  void showMenuItemTrk(const QPoint& p, const IGisItem::key_t& key);
+  void showMenuItemTrk(const QPoint& p, const IGisItem::key_t& key, bool isOnDevice);
   void showMenuItemWpt(const QPoint& p, CGisItemWpt* wpt);
   void showMenuItemRte(const QPoint& p);
   void showMenuItemOvl(const QPoint& p);
-  void showMenuItem(const QPoint& p, const QList<IGisItem::key_t>& keysTrks, const QList<IGisItem::key_t>& keysWpts);
+  void showMenuItem(const QPoint& p, const QList<IGisItem::key_t>& keysTrks, const QList<IGisItem::key_t>& keysWpts,
+                    bool hasItemOnDevice);
 
   void syncPrjToDevices(IGisProject* project, const QSet<QString>& keys);
   QSet<QString> getAllDeviceKeys() const;
@@ -176,6 +190,8 @@ class CGisListWks : public QTreeWidget {
   }
 
   QSqlDatabase db;
+  /** @brief Set by setDatabasePath(); empty for the user's own. */
+  static QString databasePathOverride;
 
   QActionGroup* actionGroupSort;
   QAction* actionSave;
@@ -238,6 +254,7 @@ class CGisListWks : public QTreeWidget {
 
   bool saveOnExit = true;
   qint32 saveEvery = 5;
+  bool workspaceLoaded = false;
 
   IDeviceWatcher* deviceWatcher = nullptr;
 

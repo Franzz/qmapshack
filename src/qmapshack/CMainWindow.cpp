@@ -42,6 +42,7 @@
 #include "gis/trk/CActivityTrk.h"
 #include "gis/trk/CDetailsTrk.h"
 #include "gis/trk/CKnownExtension.h"
+#include "gis/trk/surface/CSurfaceDbManager.h"
 #include "gis/wpt/CGisItemWpt.h"
 #include "help/CHelp.h"
 #include "helpers/CMapIconSizesSetup.h"
@@ -66,6 +67,7 @@
 #include "tool/CImportDatabase.h"
 #include "tool/CMapVrtBuilder.h"
 #include "tool/CRoutinoDatabaseBuilder.h"
+#include "tool/CSurfaceDatabaseBuilder.h"
 #include "units/CCoordFormatSetup.h"
 #include "units/CTimeZoneSetup.h"
 #include "units/CUnitsSetup.h"
@@ -142,6 +144,8 @@ CMainWindow::CMainWindow() : id(QRandomGenerator::global()->generate()) {
 
   CKnownExtension::init(IUnit::self());
   CActivityTrk::init();
+  // scans the surface databases now, not while the first track loads under IGisItem::mutexItems
+  CSurfaceDbManager::self();
 
   widgetGisWorkspace = new CGisWorkspace(menuProject, this);
   dockWorkspace->setWidget(widgetGisWorkspace);
@@ -222,6 +226,7 @@ CMainWindow::CMainWindow() : id(QRandomGenerator::global()->generate()) {
   connect(actionLoadView, &QAction::triggered, this, &CMainWindow::slotLoadView);
   connect(actionClose, &QAction::triggered, this, &CMainWindow::close);
   connect(actionCreateRoutinoDatabase, &QAction::triggered, this, &CMainWindow::slotCreateRoutinoDatabase);
+  connect(actionCreateSurfaceDatabase, &QAction::triggered, this, &CMainWindow::slotCreateSurfaceDatabase);
   connect(actionPrintMap, &QAction::triggered, this, &CMainWindow::slotPrintMap);
   connect(actionTakeScreenshot, &QAction::triggered, this, &CMainWindow::slotTakeScreenshot);
   connect(actionCloseTab, &QAction::triggered, this, &CMainWindow::slotCloseTab);
@@ -458,6 +463,7 @@ CMainWindow::CMainWindow() : id(QRandomGenerator::global()->generate()) {
                       actionClose,
                       actionCloneMapView,
                       actionCreateRoutinoDatabase,
+                      actionCreateSurfaceDatabase,
                       actionPrintMap,
                       actionTakeScreenshot,
                       actionSetupCoordFormat,
@@ -548,6 +554,45 @@ CMainWindow::~CMainWindow() {
 
   CActivityTrk::release();
 
+  saveConfig();
+
+  QList<CCanvas*> allViews;
+  QList<QWidget*> allOtherTabs;
+  for (int i = 0; i < tabWidget->count(); i++) {
+    CCanvas* view = dynamic_cast<CCanvas*>(tabWidget->widget(i));
+    if (nullptr == view) {
+      allOtherTabs << tabWidget->widget(i);
+    } else {
+      allViews << view;
+    }
+  }
+
+  /*
+      Delete all widgets in the tab widget other than views. The IPlot objects
+      in a track detail dialog send update events to the view on destruction.
+      So it is important that these are destroyed first.
+   */
+  qDeleteAll(allOtherTabs);
+  /*
+      Delete all canvas objects now to make sure they are destroyed before all
+      other objects. This allows children of the canvas to access central objects
+      like CGisWorkspace safely upon their destruction. (e.g. CMouseRangeTrk to reset
+      it's track's draw mode by key)
+   */
+  qDeleteAll(allViews);
+
+  // delete icon manager explicitely to make sure temporary icon files are
+  // removed upon destruction
+  delete wptIconManager;
+
+  // make sure to delete the workspace before the database as
+  // closing the workspace will send a couple of events to the
+  // database widget.
+  delete widgetGisWorkspace;
+  delete widgetGisDatabase;
+}
+
+void CMainWindow::saveConfig() {
   SETTINGS;
   cfg.beginGroup("MainWindow");
   cfg.setValue("state", saveState());
@@ -568,8 +613,6 @@ CMainWindow::~CMainWindow() {
      and "Views" section containing a subsection for each view.
    */
   cfg.beginGroup("Canvas");
-  QList<CCanvas*> allViews;
-  QList<QWidget*> allOtherTabs;
   QStringList allViewKeys;
 
   // save setup of all views
@@ -582,7 +625,6 @@ CMainWindow::~CMainWindow() {
     CCanvas* view = dynamic_cast<CCanvas*>(tabWidget->widget(i));
 
     if (nullptr == view) {
-      allOtherTabs << tabWidget->widget(i);
       continue;
     }
 
@@ -591,8 +633,6 @@ CMainWindow::~CMainWindow() {
     cfg.beginGroup(view->getKey());
     view->saveConfig(cfg);
     cfg.endGroup();
-
-    allViews << view;
   }
   cfg.endGroup();  // Views
 
@@ -622,20 +662,6 @@ CMainWindow::~CMainWindow() {
   CPoiDraw::savePoiPath(cfg);
   cfg.endGroup();  // Canvas
 
-  /*
-      Delete all widgets in the tab widget other than views. The IPlot objects
-      in a track detail dialog send update events to the view on destruction.
-      So it is important that these are destroyed first.
-   */
-  qDeleteAll(allOtherTabs);
-  /*
-      Delete all canvas objects now to make sure they are destroyed before all
-      other objects. This allows children of the canvas to access central objects
-      like CGisWorkspace safely upon their destruction. (e.g. CMouseRangeTrk to reset
-      it's track's draw mode by key)
-   */
-  qDeleteAll(allViews);
-
   QByteArray tz;
   IUnit::tz_mode_e tzmode;
   bool useShortFormat;
@@ -649,16 +675,6 @@ CMainWindow::~CMainWindow() {
 
   toolBarConfig->saveSettings();
   geoSearchConfig->save();
-
-  // delete icon manager explicitely to make sure temporary icon files are
-  // removed upon destruction
-  delete wptIconManager;
-
-  // make sure to delete the workspace before the database as
-  // closing the workspace will send a couple of events to the
-  // database widget.
-  delete widgetGisWorkspace;
-  delete widgetGisDatabase;
 }
 
 void CMainWindow::setupHomePath() {
@@ -918,19 +934,16 @@ void CMainWindow::slotAbout() {
 void CMainWindow::slotWiki() { QDesktopServices::openUrl(QUrl("https://github.com/Maproom/qmapshack/wiki/DocMain")); }
 
 void CMainWindow::slotQuickstart() {
-  // show menu action for German help if system language is German.
-  QString locale = QLocale::system().name();
-  if (locale.size() >= 2) {
-    locale = locale.left(2).toLower();
-    if (locale == "de") {
-      QDesktopServices::openUrl(QUrl("https://github.com/Maproom/qmapshack/wiki/DocQuickStartGerman"));
-    } else if (locale == "ru") {
-      QDesktopServices::openUrl(QUrl("https://github.com/Maproom/qmapshack/wiki/DocQuickStartRussian"));
-    } else if (locale == "es") {
-      QDesktopServices::openUrl(QUrl("https://github.com/Maproom/qmapshack/wiki/DocQuickStartSpanish"));
-    } else {
-      QDesktopServices::openUrl(QUrl("https://github.com/Maproom/qmapshack/wiki/DocQuickStartEnglish"));
-    }
+  // The local page in the GUI's language, else the wiki's quick start for that language.
+  const QString& language = IAppSetup::getPlatformInstance()->language();
+  if (QFileInfo::exists(helpRoot().absoluteFilePath(language + "/pages/quickstart.html"))) {
+    showHelp("pages/quickstart.html");
+  } else if (language == "de") {
+    QDesktopServices::openUrl(QUrl("https://github.com/Maproom/qmapshack/wiki/DocQuickStartGerman"));
+  } else if (language == "ru") {
+    QDesktopServices::openUrl(QUrl("https://github.com/Maproom/qmapshack/wiki/DocQuickStartRussian"));
+  } else if (language == "es") {
+    QDesktopServices::openUrl(QUrl("https://github.com/Maproom/qmapshack/wiki/DocQuickStartSpanish"));
   } else {
     QDesktopServices::openUrl(QUrl("https://github.com/Maproom/qmapshack/wiki/DocQuickStartEnglish"));
   }
@@ -1281,6 +1294,18 @@ void CMainWindow::slotCreateRoutinoDatabase() {
   addWidgetToTab(widget);
 }
 
+void CMainWindow::slotCreateSurfaceDatabase() {
+  // one tab is enough, it also lists the databases
+  for (qint32 i = 0; i < tabWidget->count(); i++) {
+    if (dynamic_cast<CSurfaceDatabaseBuilder*>(tabWidget->widget(i)) != nullptr) {
+      tabWidget->setCurrentIndex(i);
+      return;
+    }
+  }
+  CSurfaceDatabaseBuilder* widget = new CSurfaceDatabaseBuilder(this);
+  addWidgetToTab(widget);
+}
+
 void CMainWindow::slotLoadGISData() {
   SETTINGS;
   QString path = cfg.value("Paths/lastGisPath", QDir::homePath()).toString();
@@ -1544,7 +1569,29 @@ void CMainWindow::slotFullScreen() {
   }
 }
 
-void CMainWindow::slotStartQMapTool() { QProcess::startDetached("qmaptool", {}); }
+void CMainWindow::slotStartQMapTool() {
+  QStringList arguments;
+  if (qlOpts->nosplash) {
+    arguments << "--no-splash";
+  }
+  if (qlOpts->debug) {
+    arguments << "--debug";
+  }
+  if (qlOpts->locale != "") {
+    arguments << "--locale" << qlOpts->locale;
+  }
+  if (qlOpts->fontfamily != "") {
+    arguments << "--font-family" << qlOpts->fontfamily;
+  }
+  if (qlOpts->fontsize != "") {
+    arguments << "--font-size" << qlOpts->fontsize;
+  }
+  if (!qlOpts->colorscheme.isEmpty()) {
+    arguments << "--color-scheme" << qlOpts->colorscheme;
+  }
+  arguments << "--style" << ((QProxyStyle*)qApp->style())->baseStyle()->name();
+  QProcess::startDetached("qmaptool", arguments);
+}
 
 void CMainWindow::slotGeoSearchConfigChanged() { actionGeoSearch->setIcon(geoSearchConfig->getCurrentIcon()); }
 
@@ -1705,10 +1752,37 @@ void CMainWindow::slotSanityTest() {
   }
 }
 
-void CMainWindow::slotHelp() {
+void CMainWindow::slotHelp() { showHelp("index.html"); }
+
+QDir CMainWindow::helpRoot() {
+  // The source tree's pages match the code this binary was built from; an installed package has no source tree.
+  QDir root(QString::fromUtf8(QMS_SOURCE_DOC_HTML));
+  if (!QFileInfo::exists(root.absoluteFilePath("en/index.html"))) {
+    root = QFileInfo(IAppSetup::getPlatformInstance()->helpFile()).absoluteDir();
+  }
+  return root;
+}
+
+void CMainWindow::showHelp(const QString& page) {
+  // The GUI's language, else English: each language is a folder of its own.
+  const QDir& root = helpRoot();
+  QString file = root.absoluteFilePath(IAppSetup::getPlatformInstance()->language() + "/" + page);
+  if (!QFileInfo::exists(file)) {
+    file = root.absoluteFilePath("en/" + page);
+  }
+  qDebug() << "help page" << file;
+  if (!QFileInfo::exists(file)) {
+    QMessageBox::warning(this, tr("Help"),
+                         tr("The help pages are missing (%1). Please reinstall QMapShack.").arg(file));
+    return;
+  }
+
   if (help.isNull()) {
-    help = new CHelp(IAppSetup::getPlatformInstance()->helpFile(), "qthelp://qms/doc/doc/html/DocMain.html", this);
+    help = new CHelp(file, this);
     addDockWidget(Qt::LeftDockWidgetArea, help);
+    help->place(this);
+  } else {
+    help->setPage(file);
   }
 
   help->setVisible(true);

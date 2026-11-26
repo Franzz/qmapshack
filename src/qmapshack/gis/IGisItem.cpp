@@ -19,6 +19,7 @@
 
 #include "gis/IGisItem.h"
 
+#include <QUuid>
 #include <QtSql>
 #include <QtWidgets>
 #include <QtXml>
@@ -36,6 +37,7 @@
 #include "gis/rte/CGisItemRte.h"
 #include "gis/trk/CGisItemTrk.h"
 #include "gis/wpt/CGisItemWpt.h"
+#include "helpers/CClock.h"
 #include "helpers/CSettings.h"
 #include "misc.h"
 #include "units/IUnit.h"
@@ -170,6 +172,8 @@ QMenu* IGisItem::getColorMenu(const QString& title, QObject* obj, const char* sl
     pixmap.fill(IGisItem::colorMap[i].color);
     action = menu->addAction(QIcon(pixmap), IGisItem::colorMap[i].label);
     action->setProperty("colorIdx", i);
+    // The GPX colour name; the label is translated.
+    action->setObjectName("actionColor_" + IGisItem::colorMap[i].name);
 
     if (obj != nullptr) {
       QAction::connect(action, SIGNAL(triggered(bool)), obj, slot);
@@ -199,6 +203,11 @@ void IGisItem::genKey() const {
       key.project = project->getKey();
     }
   }
+}
+
+void IGisItem::genCloneKey() {
+  key.clear();
+  key.item = QUuid::createUuid().toString(QUuid::Id128);
 }
 
 void IGisItem::loadFromDb(quint64 id, QSqlDatabase& db) {
@@ -311,7 +320,7 @@ void IGisItem::changed(const QString& what, const QString& icon) {
   // append history by new entry
   history.events << history_event_t();
   history_event_t& event = history.events.last();
-  event.time = QDateTime::currentDateTimeUtc();
+  event.time = CClock::nowUtc();
   event.comment = what;
   event.icon = icon;
   event.who = CMainWindow::getUser();
@@ -361,7 +370,7 @@ void IGisItem::setupHistory() {
   if (history.events.isEmpty()) {
     history.events << history_event_t();
     history_event_t& event = history.events.last();
-    event.time = QDateTime::currentDateTimeUtc();
+    event.time = CClock::nowUtc();
     event.comment = tr("Initial version.");
     event.icon = "://icons/Start.svgt";
   }

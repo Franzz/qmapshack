@@ -22,15 +22,12 @@
 #include "misc.h"
 #include "poi/CPoiDraw.h"
 #include "poi/CPoiFileItem.h"
-#include "svgticon/CSvgtIcon.h"
 
 CPoiList::CPoiList(CCanvas* parent) : QWidget(parent), canvas(parent) {
   setupUi(this);
-  CSvgtIcon::load(labelIcon, "://icons/Help.svgt");
 
   connect(treeWidget, &CPoiTreeWidget::customContextMenuRequested, this, &CPoiList::slotContextMenu);
   connect(actionActivate, &QAction::triggered, this, &CPoiList::slotActivate);
-  connect(actionReloadPoi, &QAction::triggered, this, &CPoiList::slotReloadPoi);
   connect(treeWidget, &CPoiTreeWidget::sigChanged, this, &CPoiList::sigChanged);
   connect(labelHelpFillPoiList, &QLabel::linkActivated, &CMainWindow::self(),
           static_cast<void (CMainWindow::*)(const QString&)>(&CMainWindow::slotLinkActivated));
@@ -38,7 +35,6 @@ CPoiList::CPoiList(CCanvas* parent) : QWidget(parent), canvas(parent) {
   menu = new QMenu(this);
   menu->addAction(actionActivate);
   menu->addSeparator();
-  menu->addAction(actionReloadPoi);
   menu->addAction(CMainWindow::self().getPoiSetupAction());
 }
 
@@ -73,7 +69,7 @@ CPoiFileItem* CPoiList::item(int i) { return dynamic_cast<CPoiFileItem*>(treeWid
 
 void CPoiList::updateHelpText() {
   if (treeWidget->topLevelItemCount() == 0) {
-    labelIcon->show();
+    helpBlock->show();
     labelHelpFillPoiList->show();
     labelHelpActivatePoi->hide();
   } else {
@@ -81,7 +77,7 @@ void CPoiList::updateHelpText() {
 
     CPoiFileItem* item = dynamic_cast<CPoiFileItem*>(treeWidget->topLevelItem(0));
     bool haveActive = item && item->isActivated();
-    labelIcon->setVisible(!haveActive);
+    helpBlock->setVisible(!haveActive);
     labelHelpActivatePoi->setVisible(!haveActive);
   }
 }
@@ -117,8 +113,6 @@ void CPoiList::slotActivate() {
 
   updateHelpText();
 }
-
-void CPoiList::slotReloadPoi() { CPoiDraw::setupPoiPath(CPoiDraw::getPoiPaths()); }
 
 void CPoiList::slotContextMenu(const QPoint& point) {
   CPoiFileItem* item = dynamic_cast<CPoiFileItem*>(treeWidget->currentItem());

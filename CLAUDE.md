@@ -9,8 +9,8 @@ vector maps and DEM data; supports online and offline routing engines.
 
 - **Language:** C++20
 - **GUI / framework:** Qt 6.8+
-- **Key libs:** GDAL, PROJ 8+, Routino
-- **Build:** CMake 3.20+, Ninja; Debug build in `build/`, binaries in `build/bin/`
+- **Key libs:** GDAL, PROJ 9.4+, Routino
+- **Build:** CMake 3.20+, Ninja; build tree `build/`, binaries in `build/bin/`
 - **Bundled 3rdparty:** Garmin FIT SDK
 - **Minimum GDAL:** 3.10
 
@@ -20,7 +20,7 @@ vector maps and DEM data; supports online and offline routing engines.
 
 ```
 src/
-  qmapshack/        main app (21 subsystems)
+  qmapshack/        main app
     canvas/         map rendering
     gis/            tracks, routes, waypoints, DB, GPX, routing (gis/rte/router/)
     mouse/          mouse interaction; line editing in mouse/line/
@@ -28,6 +28,7 @@ src/
   qmaptool/         map creation tool
   qmt_map2jnx/      utility
   qmt_rgb2pct/      utility
+  qms_surfacedb/    surface database tool
   common/           shared code
 ```
 
@@ -36,56 +37,109 @@ src/
 ## Working rules
 
 - **Never build.** No `cmake --build`, `ninja` or `make` — not even to verify an edit. Make the
-  change, run `clang-format`, report, stop. If a compile is genuinely needed to be sure, say so.
-  For reference, the user runs `cmake --build build --target qmapshack -j$(nproc)`.
+  change, run `clang-format`, report, stop. For reference, the user runs
+  `cmake --build build --target qmapshack -j$(nproc)`.
+- **Check the facts before changing anything**: code, ticket or measurement first. Say what could
+  not be checked.
+- **Run it before reporting it.** Verify headlessly with `doc/tools/shots.py` (`-o <scratch> replay`,
+  `selftest`), read the images and the JSON/INI written. Name the command that showed it, or say
+  nothing was run and what would settle it.
+- **Garmin's own rendering is the reference for IMG maps**: BaseCamp under Wine, set up in `~/wine/basecamp`;
+  how to run and rebuild it: `.notes/basecamp-wine.md`.
+- **Syntax-check changed files**: `.notes/syntax-check.sh <file.cpp>...` (each file's command from
+  `ninja -t compdb` with `-fsyntax-only`; a header is checked through a `.cpp`). Catches shadowing and stale identifiers; not
+  moc, AUTOUIC, linking, or anything inside `#if defined(Q_OS_WIN32)`.
 - **Never commit or push** without being asked for that specific change.
-- **No `Co-Authored-By` lines** in commit messages.
+- **Folding fixes into a branch's commits**: one `--fixup` per group of whole files, into the last commit touching
+  them; files using each other's new API go together. Then `rebase -i --autosquash --exec '<build>'` and check
+  `git diff <before> HEAD` is empty. Hunk-wise folding conflicts with later commits, and `git apply
+  --unidiff-zero` misplaces zero-context hunks.
+- **`gh pr edit` fails on GitHub's Projects (classic) deprecation**; set a PR body with
+  `gh api -X PATCH repos/Maproom/qmapshack/pulls/<n> --input <json>`.
+- **Pull requests go to `Maproom/qmapshack` `dev`** from `kiozen:<branch>`, the body from
+  `.github/PULL_REQUEST_TEMPLATE.md` with every section kept.
+- **Every PR is checked for documentation changes**: which `doc/<lang>/pages` text and images show what
+  changed, and whether the PR changes them. The template's documentation section says both.
+- **No Claude attribution** in commit messages or PR descriptions: no `Co-Authored-By`, no "Generated with
+  Claude Code".
+- **Working on a ticket adds its line to `changelog.txt`** as part of the change, under the top
+  version block, sorted by ticket number: `[QMS-nnnn] <commit subject>`. Skip it only if the line
+  is already there.
 - For "what were we working on", read `git status && git diff` first — the live diff is ground
   truth, notes are not.
-- Store project learnings in this file, not in the auto-memory system. Append under the matching
-  section or add a new `###`. Keep it to forward-usable facts; git holds the history.
+- Store project learnings in this file or the subsystem's own `CLAUDE.md` (see "Subsystem notes
+  elsewhere"), not in the auto-memory system. Before adding, check it is not already said here or in
+  `.notes/`. One or two lines of rule; no measurements, anecdotes or history unless the number is the
+  rule. Git holds the history.
 - Multi-session plans and specs go in the tracked `.notes/` directory, named `<topic>-plan.md`,
   with a pointer from `## Open work` here. Never invent another location.
 - **This checkout (`~/projects/qmapshack`, remote `kiozen/qmapshack`) is where work happens.**
   `~/projects/qmapshack_master` tracks `Maproom/qmapshack` and is for reference only — never
   branch or edit there.
 
+### Windows from the start
+
+Everything must work on Windows, though only Linux is run here. Check each change against these before reporting:
+
+- **Text a tool writes gets its line ending pinned**: Python `open(..., "w", newline="\n")` (Python 3.9, which the doc tools
+  support, has no `write_text(newline=)`), and a post-pass to LF for files a third-party tool (Sphinx) writes. Text mode writes CRLF on Windows, and a CRLF copy
+  of an `eol=lf` file shows as modified in `git status` while `git diff` is empty.
+- **Every text file is LF in every checkout** (`* text=auto eol=lf`, whatever `core.autocrlf` says); `.gitattributes`
+  lists only exceptions: CRLF scripts, vendored files, bytes that must not change. A checkout from before the rule
+  needs `git rm -r --cached . && git reset --hard` once (drops uncommitted changes). `generate_html.py` refuses a
+  `TEXT_SUFFIXES` file under `doc/html` that `git check-attr` does not pin to `eol=lf`.
+- **A compiled-in source-tree path is a developer fallback only**; the installed layout must work on its own, and the
+  Windows deploy scripts (`msvc_64/*.bat`) are updated with every CMake `install()` change.
+- **Paths via `pathlib`/`QDir`**, never `/`-joined strings or a `bin/` that is `Scripts\` on Windows.
+- Windows-only instructions in a doc are spelled out; a Linux command does not stand for both.
+
 ---
 
 ## Build system
 
-Target-scoped CMake. Nothing is set at directory scope except the MSVC options below.
+Target-scoped CMake. Directory scope holds only platform and toolchain flags (PIC, MSVC, Apple
+libc++, ASan).
 
-- **Never touch the translation block's gating.** `UPDATE_TRANSLATIONS` off means no lupdate target
-  exists at all, so no build can rewrite the tracked `.ts` files; the catalogs are refreshed only
-  when translation work is deliberately finished. Qt's always-present `update_translations` target
-  is not a substitute. The `/locale` resource in the `else` branch stays too: every translator loads
-  `.qm` from a filesystem path, so nothing reads it, but `qt_add_resources(<app> ...)` is what makes
-  the `.qm` files inputs of the *application* target. Drop it and `--target qmapshack` stops
-  producing the catalogs the packaging scripts copy out of `<build>/src/<app>/`.
+- **Never touch the translation block's gating.** With `UPDATE_TRANSLATIONS` off no lupdate target
+  exists, so no build rewrites the tracked `.ts` files; Qt's `update_translations` is no substitute.
+  Keep the `/locale` resource in the `else` branch: nothing reads it, but it makes the `.qm` files
+  inputs of the application target, which the packaging scripts copy from `<build>/src/<app>/`.
+- **All ten `.qm` catalogs (base plus nine languages) are in the binary under `:/locale`**.
+  `prepareTranslators()` takes the installed catalog first and falls back to `:/locale` only for an explicit
+  `--locale`: a build-tree run is English unless given one. With `UPDATE_TRANSLATIONS` on there is no `:/locale`.
+- **Standard dialog buttons are translated by the platform theme, not a `.qm`**, following
+  `LANGUAGE`/`LC_MESSAGES`. `QT_QPA_PLATFORMTHEME=` (empty) still loads `kde` via
+  `XDG_CURRENT_DESKTOP`; `generic` does not. Offscreen loads no theme and ignores the variable.
+- **An unknown `QT_QPA_PLATFORMTHEME` still loads the desktop's theme**, so a documentation run
+  pins the rest. Generic theme vs none (Qt 6.10.2, Fusion) differs only in
+  `SH_DialogButtonBox_ButtonsHaveIcons` and `QIcon::themeName()`:
+  `CQmsStyle::pinThemeIndependentHints()` answers the hint 0; nothing pins `QIcon::themeName()`. Any
+  further difference goes into that override, never a per-symptom patch.
+- **`QLocale::system()` follows `LANGUAGE`, not only `LANG`.** A desktop-independent run passes
+  `--locale`.
+- **Stack smashing at startup after a checkout:** stale objects; `ninja -C build -t clean qmapshack`.
 - **`qms_options`** is the INTERFACE target carrying the project's warning set. First-party targets
   link it `PRIVATE`; bundled 3rdparty must not. Add flags through `qms_add_flag_if_supported()`.
 - **`target_link_libraries` is keyword form everywhere.** Plain and keyword signatures cannot be
   mixed on one target, so a new call must say `PRIVATE`.
 - **Dependencies are imported targets**: `GDAL::GDAL`, `PROJ::proj`, `JPEG::JPEG`,
   `ROUTINO::ROUTINO`. `ROUTINO_XML_PATH` stays a plain variable — qmapshack passes it as a define.
-- **Defines are per target**: `HELPPATH` on qmapshack and qmaptool, `ROUTINO_XML_PATH` and
-  `HAVE_DBUS` on qmapshack. Global on purpose: `_CRT_SECURE_NO_WARNINGS`, `/MP` and `/utf-8` under
-  MSVC, which the bundled FIT SDK needs, and `-march=native`.
+- **`Qt6::GuiPrivate` comes with `Gui` in 6.8, is a package of its own from 6.9 and required from
+  6.10**, so it is an `OPTIONAL_COMPONENTS` find with no version test; a missing package still fails at
+  `target_link_libraries`. `QT_NO_PRIVATE_MODULE_WARNING` is set: documentation mode never ships, so
+  being tied to one Qt build is accepted. Only 6.10.2 is tested.
+- **Defines are per target**: `HELPPATH` on qmapshack and qmaptool, `ROUTINO_XML_PATH`,
+  `HAVE_DBUS` and `QMS_SOURCE_DOC_HTML` (the source tree's `doc/html`, F1's first choice) on qmapshack. Global on purpose: `_CRT_SECURE_NO_WARNINGS`, `/MP` and `/utf-8` under
+  MSVC, which the bundled FIT SDK needs, and `-march=native` with `BUILD_FOR_LOCAL_SYSTEM`.
 - **Install paths** come from `GNUInstallDirs` on UNIX and stay relative to the application
   directory on Windows, where `CAppSetupWin` resolves `HELPPATH` against it. Six cache variables
   survive so a packager can override them. `HTML_INSTALL_DIR` is `share/doc/HTML`, not
   `CMAKE_INSTALL_DOCDIR` — changing it moves the installed help.
-- **`CMAKE_RUNTIME_OUTPUT_DIRECTORY` is set, the four per-config variables are deliberately not.**
-  They are the only thing a multi-config generator consults for its `$<CONFIG>` suffix, so pinning
-  them collapses every configuration into one `bin`, which leaves a `.pdb` from the previous
-  configuration beside a mismatched `.exe` and makes the build report the other config's binary as
-  up to date. `msvc_64/CopyFilesGis.bat` reads `bin\Release\` and wants the suffix. Single-config
-  generators resolve the per-config variable to the same path as the plain one, so Linux and the
-  macOS release path (`build-QMS.sh` uses `Unix Makefiles`; its Xcode branch is marked BROKEN and
-  exits before bundling) are flat whatever the build type.
-- **`ConfigureChecks.cmake` probes through the C++ compiler.** The project enables no C language, so
-  `check_include_file` / `check_symbol_exists` hard-fail; use the `_cxx` variants.
+- **`CMAKE_RUNTIME_OUTPUT_DIRECTORY` is set, the four per-config variables deliberately not**: a
+  multi-config generator needs them unset for its `$<CONFIG>` suffix (`msvc_64/CopyFilesGis.bat` reads
+  `bin\Release\`); pinned, every configuration shares one `bin` and mixes `.pdb` and `.exe`.
+- **The project enables C as well as C++**: PROJ's imported target can carry C compile features
+  (Homebrew's `c_std_99`). `ConfigureChecks.cmake` still probes with the `_cxx` variants.
 - **`CMAKE_AUTOUIC` is OFF** — the `.ui` files are listed explicitly and go through `qt_wrap_ui`.
   `qt_standard_project_setup()` sits directly after `find_package(Qt6 ...)` because it flips
   AUTOMOC/AUTOUIC and appends to `CMAKE_INSTALL_RPATH`.
@@ -95,6 +149,20 @@ Target-scoped CMake. Nothing is set at directory scope except the MSVC options b
 - `CMakePresets.json` holds three usable Linux presets; the Windows and macOS entries are untested
   stubs and the platform blocks in `CMakeLists.txt` still drive those builds. The developer-facing
   howto is `README_PRESETS.md`, linked from the README's Linux build section.
+
+### Translator loading
+
+- **The application catalog is the gate** (`IAppSetup::prepareTranslators()`): without
+  `<appPrefix><locale>.qm` Qt's own strings are English too. The desktop installs a Qt catalog before
+  the app runs, so the untranslated branch installs `CSourceTextTranslator`, which answers every
+  lookup with the source text and wins as the newest translator. One copy per app; `qmt_rgb2pct`
+  keeps its own two-liner.
+- **A desktop integration translates its own strings by `LANGUAGE`** while the platform plugin loads
+  (KDE's button labels come from `kwidgetsaddons6_qt.qm`). So `IAppSetup::exportLocaleEnv()`, first
+  in `main()`, puts `--locale` into `LANGUAGE`, parsing argv by hand.
+- **`QTranslator::load()` succeeding is no existence test**: it strips suffixes until something loads
+  (`qmapshack_pl` loads `qmapshack.qm`). Test `QFileInfo::exists()` on the exact name and pass the
+  full `<prefix><locale>.qm`.
 
 ---
 
@@ -106,8 +174,16 @@ Target-scoped CMake. Nothing is set at directory scope except the MSVC options b
 clang-format -i <file> [<file> ...]
 ```
 
+Only `.cpp`/`.h`: given a Markdown file it rewrites it as C++. From a diff:
+`git diff --name-only -- '*.cpp' '*.h' | xargs clang-format -i`.
+
 Style is `.clang-format` in the project root (Google base, 120 columns). Always accept its output —
 never revert or hand-tune it, and keep reformat hunks it makes on unrelated pre-existing drift.
+
+**Win32 includes are the one exception.** `<windows.h>` must precede every other SDK header, or MSVC
+fails with `winnt.h: #error "No Target Architecture"`. clang-format sorts alphabetically and puts
+`errhandlingapi.h`, `fileapi.h`, `winbase.h` in front of it, so include only `<windows.h>` (it pulls
+those in) or guard the block with `// clang-format off` as `CMainWindow.cpp` does.
 
 - **Every control-flow block requires braces**, including single-statement bodies.
 - **Doc comments are `/** */` doxygen blocks** (`@brief`, `@param`, `@return`); inline member docs
@@ -117,6 +193,8 @@ never revert or hand-tune it, and keep reformat hunks it makes on unrelated pre-
   ticket/bug/PR history behind it.
 - **Pass `QString` and complex objects (`QVector`, `QImage`, …) by `const&`** unless the function
   mutates them. Plain `T&` is for genuine out-parameters only.
+- **A time stamped on an item, project or filter result comes from `CClock::nowUtc()`** (`helpers/CClock.h`),
+  never `QDateTime::currentDateTime*()`: a documentation run pins it so images stay the same.
 - **Prefer static `QFileInfo::exists(path)`** over `QFileInfo(path).exists()` for a bare existence
   check.
 - **Prefer Qt fixed-width typedefs**: `qint32`/`quint32`, `qreal`, `qsizetype` for Qt container
@@ -124,19 +202,22 @@ never revert or hand-tune it, and keep reformat hunks it makes on unrelated pre-
   `ReadRaster()`).
 - **Constructor and destructor come first in a `.cpp`**, in that order; every other member function
   follows both.
+- **Log and error messages are for the reader, not the code.** Say what is wrong in the user's terms
+  and hint how to fix it. No raw JSON, internal keys or class names as the message itself — that
+  detail goes after it or behind `-d`. Report the first cause once, not every failure it triggers.
 
 ---
 
 ## Architecture: mouse/line editor
 
-`src/qmapshack/mouse/line/`.
+`src/qmapshack/mouse/line/`; the three editors are in `mouse/`.
 
 ```
 IMouseEditLine          – owns the point list (SGisLine), undo/redo history,
 │                          routing mode buttons, and the active ILineOp
-├── CMouseEditTrk       – edits a track (IGisItemTrk)
-├── CMouseEditRte       – edits a route (IGisItemRte)
-└── CMouseEditArea      – edits an area overlay (IGisItemOvl)
+├── CMouseEditTrk       – edits a track (CGisItemTrk)
+├── CMouseEditRte       – edits a route (CGisItemRte)
+└── CMouseEditArea      – edits an area overlay (CGisItemOvlArea)
 
 ILineOp                 – base for one interactive editing operation
 ├── CLineOpAddPoint     – insert new points / extend the line
@@ -153,7 +234,7 @@ deletes the current op and creates a new one.
 `CRouterSetup::calcRoute()` shows a `CProgressDialog` running a nested `QEventLoop`. The full Qt
 event pipeline stays live while it spins, so during routing:
 
-- `mouseMove()` fires and drifts `points[idxFocus].coord` to the cursor.
+- `mouseMove()` fires; `CLineOpAddPoint`/`CLineOpMovePoint` ignore it while `isRouting`.
 - A right-click reaches `abortStep()` → `restoreFromHistory()`, which reallocates `points` and
   invalidates every saved index or pointer into it.
 - A left-click can re-enter `leftClick()`.
@@ -162,12 +243,11 @@ event pipeline stays live while it spins, so during routing:
 return value.** It:
 
 1. Pins `points[idxFocus].coord = coord` before routing.
-2. Sets `isRouting = true` — subclasses test this at the top of `leftClick()` to block re-entry.
+2. Sets `isRouting = true` — subclasses test it in `leftClick()` to block re-entry.
 3. Calls `slotTimeoutRouting()` → `finalizeOperation()` → `tryRouting()`.
 4. Re-validates `idxFocus` against `points.size()` after the loop returns (an abort leaves both
    unknown).
-5. Restores `points[idxFocus].coord = coord`, undoing any drift.
-6. Returns `false` if aborted — the caller must return immediately.
+5. Returns `false` if aborted — the caller must return immediately.
 
 ### CLineOpAddPoint state
 
@@ -186,6 +266,83 @@ active point → `leadLineCoord1/2` (geographic) and `leadLinePixel1/2` (screen)
 
 ---
 
+## Architecture: MTP devices
+
+`CDeviceGarminMtp` works only through the abstract `IDeviceAccess`. The maintainer's rule is that
+new device support goes into the OS-specific device watcher and an `IDeviceAccess` subclass only;
+growing `IDeviceAccess` or touching `CDeviceGarminMtp`/`IDevice`/the workspace needs a real
+blocker. `IDeviceAccess` is synchronous by design. `CDeviceAccessKMtp::waitForCopyOperation()`
+keeps the GUI repainting through a transfer by spinning a nested `QEventLoop` inside the
+synchronous call, so a backend with a worker thread gets a responsive GUI without an async API.
+The project loader calls `listFilesOnStorage()` from a `CThread` and `readFileFromStorage()` on
+the GUI thread (`BlockingQueuedConnection`). Each storage of a device is its own workspace device,
+so a memory card shows next to the internal storage; a storage without `GarminDevice.xml` falls
+back to the fixed paths in `CDeviceGarminMtp::setup()`.
+
+**Nothing writes an item change back to a device.** So the workspace menus, on-map buttons and map
+selection disable item changes on `isOnDevice()`, and a track converted from one goes to a workspace
+project; only a whole project can be removed.
+
+**Stopping an MTP load thread:** `IDevice::stopLoading()` cancels each load thread with a 100 ms
+deadline (`CThread::cancel(receiver, deadline)`) and returns false while a call into the device is
+on the GUI stack or a thread has not ended (`setProgress()` needs `mutexItems`); `removeDevice()`
+and the Archive's collapse retry later. Code that enters a nested loop (KMtp transfer, LibMtp call,
+dialog, `processEvents()`) and then calls into a device or its project holds an
+`IDevice::CRunningCall` from before the loop. Only the destructors wait without a limit;
+`CDeviceGarmin`/`CDeviceGarminArchive` still use the 5 s `cancel()`.
+
+### macOS: `CDeviceAccessLibMtp`
+
+libmtp is required on macOS. One worker thread per USB device (`Connection`) owns the libmtp
+session and serves every storage's `CDeviceAccessLibMtp`; each call waits behind a nested loop.
+
+- **Devices are found through libusb hotplug, never by `LIBMTP_Detect_Raw_Devices()`.** That scan
+  opens every USB device missing from libmtp's device table and sends vendor requests to some of
+  them. `CUsbWorker` registers a hotplug callback filtered on Garmin's vendor id (it also reports
+  devices already connected), and `CDeviceAccessLibMtp::openDevice()` takes the flags from libmtp's
+  table or probes that one device with `LIBMTP_Check_Specific_Device()`, on the worker thread. The
+  GUI thread never calls libmtp. libusb's bus number and device address are what libmtp's raw device
+  wants.
+- **The watcher reconciles, it does not react.** Hotplug only edits `pluggedMtpDevices`;
+  `slotUpdateMtp()` then removes what is open but no longer plugged and opens at most one plugged
+  device per pass. Every open and removal runs local event loops that can re-enter it, so a nested
+  call only sets `updateMtpAgain` and the outer call runs another pass; the timer is set once, at
+  the end. A serial per arrival tells a device replugged at the same address from the earlier one.
+- **A new device is opened 3 s after it appears.** A booting device can show up on USB briefly and
+  leave again; the delay keeps such a device from being opened. Any failed open —
+  not MTP yet, no storage yet, a failed listing, held by Garmin Express or OpenMTP — is retried
+  2.5, 5, 10, 20 and 40 s later, then given up until the device is plugged in again. A device
+  without `GarminDevice.xml` is dropped at once.
+- **libmtp is not thread safe, so every libmtp call holds one process-wide mutex.** Consequence:
+  destroying a `Connection` blocks the GUI until another device's running transfer ends.
+- **A device must not be deleted while a call to it runs**, since the call waits in local event
+  loops, its failure message boxes included. Each public call holds `CBusy` on its connection's
+  counter, and the watcher postpones removing a device whose `isBusy()` is true.
+- **A quit aborts every running transfer.** `aboutToQuit` comes before any event loop ends and sets
+  the process-wide `quitting`; every connection's progress callback then aborts, and the object an
+  aborted upload created is deleted. Process-wide because nested device calls wait on each other's
+  libmtp lock, and the loader thread's loops do not end on a quit. `run()` posts the loop's quit
+  before it releases the semaphore.
+- **Transfers go straight through the caller's file descriptor**, as `CDeviceAccessKMtp` does. Nothing
+  is read back.
+- **An upload never deletes a file.** "Send to Devices" of a project the device already has goes
+  through `IDevice::updateProject()`, which removes the device's copy first, so a name still taken
+  belongs to another project: `simplifiedName()` drops every character outside `[A-Za-z0-9_]`, and
+  "Tour 1" and "Tour-1" both become `Tour1.gpx`. The upload refuses it.
+- **Object ids come from remembered folder listings.** A lookup walks the path down from the Garmin
+  folder, taking ancestors from memory. Listing a folder, sending and removing fetch the folder
+  concerned; reading reuses it. A lookup that fails
+  forgets every listing and is walked once more from the device, and nothing below `retryLookup()`
+  retries; a failed read forgets them too. Forgetting must reach the ancestors: a folder made anew
+  keeps its stale id in its parent's listing.
+  `LIBMTP_Get_Files_And_Folders()` returns no files for an empty folder and for a failure alike,
+  so `entries()` tells them apart by the error stack.
+- `LIBMTP_Open_Raw_Device_Uncached()` already calls `LIBMTP_Get_Storage()` and fails only on -1;
+  1 means storage ids without properties and is a working device.
+- Homebrew Qt ships D-Bus, so a macOS build also compiles the Linux D-Bus device sources.
+
+---
+
 ## Architecture: routers
 
 `IRouter` is the abstract base:
@@ -198,8 +355,8 @@ active point → `leadLineCoord1/2` (geographic) and `leadLinePixel1/2` (screen)
 `sigHasFastRouting(bool)` when the router capability changes; `IMouseEditLine` listens and
 enables/disables the auto-routing button.
 
-Only local BRouter supports fast (on-the-fly) routing. Online BRouter and Routino need the whole
-route at once via `calcRoute(const IGisItem::key_t&)`.
+Routino and local BRouter support fast (on-the-fly) routing; online BRouter needs the whole route at
+once via `calcRoute(const IGisItem::key_t&)`.
 
 ---
 
@@ -220,20 +377,58 @@ preview curve.
 - Below ~80 nodes the basis, not the penalty, limits the curve. That is where the quality setting
   changes the result.
 
-### IGarminStrTbl label cache (the `get`/`decode` split)
+---
 
-Profiling (Tracy) showed label decoding (`strtbl.get`) was the single largest slice of
-`loadVisibleData` — an `mmap` (via `CFileExt::data()`) plus a codepage decode **per labelled object,
-re-done every frame** even though label content is immutable. To fix that, `IGarminStrTbl::get()` is a
-**non-virtual** cache wrapper over a bounded LRU `QCache<quint64, QStringList>` (key `(type << 32) |
-offset`); on a miss it delegates to the protected pure-virtual **`decode()`** (the per-coding work,
-implemented by `CGarminStrTbl6/8/Utf8`). Do not re-merge `get`/`decode` or make `get` virtual again —
-the split exists so the cache lives in exactly one place. The cap (`labelCacheMaxEntries`) bounds
-memory when panning huge gmapsupp files; a hit needs no `mmap` at all, which also shrinks the
-per-subfile `CFileExt::free()` `munmap` loop. The cache is touched only from the draw thread
-(`get()` ← `loadSubDiv` ← `loadVisibleData` ← `draw`, all serialized), so it needs no lock.
-Tracy zones: `strtbl.get` = wrapper (hits+misses), `strtbl.decode` = misses only — compare their call
-counts to read the hit rate.
+## Garmin label cache — `IGarminStrTbl`
+
+`get()` is a non-virtual wrapper over a bounded LRU `QCache` (key `(type << 32) | offset`); a miss
+calls the pure-virtual `decode()` of `CGarminStrTbl6/8/Utf8`. Keep the split so the cache lives in one
+place. Only the draw thread touches it, so no lock.
+
+---
+
+## Mapsforge POI loading — `CPoiFilePOI`
+
+A square counts as loaded once it has an entry in `loadedPoisByArea`, so read it only through `isLoaded()`/`poisInSquare()`:
+`operator[]` inserts. Only a failed `prepare()` (lock, missing table) leaves squares unloaded, retried on the next draw; it stops
+that draw's loading. A failed `exec()`/`next()` (corruption) keeps what was read: retrying costs every draw and cannot help.
+A following `exec()` replaces `prepare()`'s error by "Parameter count mismatch", so check `prepare()` on its own.
+
+---
+
+## Surface databases — `CSurfaceDb`
+
+Opened as `immutable=1` through a URI, so SQLite takes no lock: a built file never changes (the builder renames a finished
+`.part` into place). The URI is percent-encoded and has no authority, which SQLite rejects.
+
+---
+
+## Folder watchers — `CFolderWatcher`
+
+Maps, DEM, POI, Routino and surface folders reload by themselves; there is no manual reload. `setPaths()` takes the
+folders' files as seen, so it is called only where every view rescans (`setupXPath(list)`, `loadXPath(cfg)` at start,
+`buildDatabaseList()`, `rescan()`), never in one view's scan: that would swallow a change the others have not seen.
+A builder writing into a watched folder never shows half a result under a watched name: Create Routino Database builds
+in a `QTemporaryDir` inside the target, the VRT Builder as `<name>.vrt.part`. Qt's inotify folder mask has no
+`IN_MODIFY`, so a file overwritten in place is noticed only at the next start.
+
+---
+
+## Help browser — `CHelpBrowser`
+
+A `QWebEngineView` on its own off-the-record profile. QMapShack loads `doc/html/` from `file://` (`engine` is null) and sets Furo's
+theme; QMapTool's `qthelp` handler serves `QHelpEngine::fileData()`.
+`registerUrlScheme()` must run in both `main()`s before the `QApplication`. The destructor deletes the page
+first: a profile deleted before its page is a Qt error. Theme colours are an injected `<style>`, rewritten on a palette change, never a reload.
+
+---
+
+## GIS item keys
+
+`key.item` is the database identity (`items.keyqms`, unique): an import links an item whose key
+exists instead of storing it again. It is the MD5 of the item's data, a geocache's id for a
+waypoint with geocache data and no key yet. A clone takes a random key (`genCloneKey()`), since
+every clone of one item has the same data.
 
 ---
 
@@ -243,40 +438,13 @@ counts to read the hit rate.
 - `gis/CDBItemDelegate.{h,cpp}` — database tree
 - `map/CMapItemDelegate.{h,cpp}` — map-item tree
 
-### Row layout: CRowBuilder
+Every `getRectangles*()` carves its row with `CRowBuilder` (`helpers/CRowBuilder.h`); padding is
+`kCellPad`/`kInnerGap` there. `CWksItemDelegate` and `CDBItemDelegate` take
+name-height buttons (`takeButton(fmName.height())`) with `fullStatusSlice()`, so the status line runs
+under them; `CMapItemDelegate` takes full-height ones (`takeRight(row.height())`) with `statusSlice()`.
 
-Every `getRectangles*()` uses `CRowBuilder` (`helpers/CRowBuilder.{h,cpp}`) to carve a row into
-icon, button and text zones — no magic-number arithmetic in the delegates.
-
-Tuning parameters live in `helpers/CDraw.h`: `kCellPad` (outer inset on all four sides of
-`opt.rect`) and `kInnerGap` (gap between icon, text column and each button).
-
-```cpp
-CRowBuilder row(opt.rect, kCellPad, kInnerGap);
-const QRect rectIcon   = row.takeLeft(row.height());      // square icon
-row.markStatusColumn();                                   // snapshot width for status line
-const QRect rectButton = row.takeButton(fmName.height()); // name-height square button
-const QRect rectName   = row.nameSlice(fmName.height());
-const QRect rectStatus = row.fullStatusSlice(fmStatus.height());
-```
-
-- `takeLeft(w)` / `takeRight(w)` — carve a full-height rect, advance by `kInnerGap`
-- `takeButton(iconSize)` — square button sized so `CDraw::drawToolButton` renders its icon at
-  exactly `iconSize × iconSize` (compensates the button's internal icon inset)
-- `markStatusColumn()` — snapshot the remaining rect before buttons are carved
-- `nameSlice(h)` / `statusSlice(h)` — top / bottom strip of the button-narrowed centre area
-- `fullStatusSlice(h)` — bottom strip of the *pre-button* column, so the status line runs under the
-  buttons
-- `rowHeight(cellPad, nameH, statusH)` — matching `sizeHint` height
-
-**Button height convention:** `CWksItemDelegate` and `CDBItemDelegate` use
-`takeButton(fmName.height())` (name row only) with `fullStatusSlice`; `CMapItemDelegate` uses
-`takeRight(row.height())` (full row height) with `statusSlice`.
-
-### CMapItemDelegate forward declaration
-
-`animations_t` is defined after `getAnimations()` in the private section, so the
-`struct animations_t;` forward declaration above `getAnimations()` is required. Do not remove it.
+`CMapItemDelegate`'s `struct animations_t;` forward declaration is required: the type is defined
+after `getAnimations()`.
 
 ---
 
@@ -305,6 +473,13 @@ Do not re-add a `setIcon(const QPixmap&)` overload on `IDBItem`.
 stylesheets and `setTextColor()`. Roles `Neutral/Ok/Warn/Error/Info/Code`, each a fixed light/dark
 pair. Tune there, never per site.
 
+`--color-scheme light|dark` is a normal option of both apps (`CUiTheme::pinColorSchemeOption()` from `main()`, after
+`initLogHandler()` so a wrong value is logged; passed on to QMapTool). It sets the scheme hint and installs Fusion's palette only
+where the palette does not follow; a doc run always installs Fusion's, so output cannot depend on the desktop.
+Before the first window; not a scope, not undoable. The palette is what
+matters (`paletteIsDark()` reads it): `setColorScheme()` is inert on X11 and `standardPalette()`
+asks the platform theme.
+
 ### Choosing the entry point
 
 | The widget… | Use |
@@ -320,157 +495,8 @@ inverts on dark. Set **nothing** on a plain item-view row so it keeps the palett
 `QPalette::Disabled, QPalette::Text`, never `Qt::gray`. Never bake a colour into a `tr()` string or
 a `.ui` `<string>`; the translation carries it.
 
-### Following a live scheme switch — `changeEvent()`
-
-Two measured facts (Qt 6.10.2) set the whole design:
-
-- **`QEvent::PaletteChange` reaches every widget, at every nesting depth, exactly once.** So a
-  widget that holds scheme-derived content rebuilds it in its own `changeEvent()` and needs nothing
-  central to drive it. (`ApplicationPaletteChange` is the one that arrives only on the application
-  object — that difference is what makes `CThemeRefresher` a filter, not a `changeEvent`.)
-- **A themed colour is baked in when the content is set** — into a `QTextCharFormat`, a style
-  sheet, a `QPalette`, a rendered pixmap — and the source is dropped. `QTextDocument::toHtml()`
-  returns the baked colour, not the markup it came from, so `setHtml(toHtml())` repairs nothing.
-  Only re-running whatever produced the content works.
-
-So the rule is Qt's own, and it costs one override in the class that owns the content:
-
-```cpp
-void CFilterSpeed::changeEvent(QEvent* e) {
-  QWidget::changeEvent(e);
-  if (CUiTheme::isPaletteChange(e)) {
-    updateUi();  // whatever already regenerates this widget's content
-  }
-}
-```
-
-- **Regenerate, do not patch.** The producer is normally a method that already exists
-  (`updateData()`, `buildHelpText()`, `renderThemedContent()`), and re-running it fixes the palette
-  colours (links) and the themed markup (`CUiTheme::span`) in one pass. That is why no rich-text
-  widget subclass is needed: every browser in the tree has an owner that regenerates it.
-- **Do not run something re-entrant from the handler.** `CDetailsPrj` restarts its timer because
-  `slotSetupGui()` drives a nested event loop; `CGridPlacer` checks `points` is populated first.
-- **A handler that answers with `setPalette()`/`setFont()` needs a re-entrancy guard** — both
-  re-deliver the event to the same widget (measured: one `updateStyle()` emits two `FontChange`s).
-  `CLineEdit`/`CTinySpinBox` use `applyingStyle`.
-- **Do not hand a themed string to something that stores it.** Pass the role and resolve at render
-  time: `CCanvas::reportStatus(key, role, msg)` keeps the role unresolved in `statusMessages`.
-- A themed colour that is only *returned* (`getInfo()`, a tooltip string) is fine — a tooltip is
-  built fresh each time, and the widget that displays stored markup is what regenerates.
-- **`CThemeRefresher` covers the two cases a `QLabel` cannot fix for itself**: a `markLabel()` role
-  (the style sheet holds the resolved colour, so the role is recorded on the label and applied
-  again) and a baked anchor colour (the label's own text is re-applied). Both are automatic, so a
-  `markLabel()` caller needs no `changeEvent()`. `installThemeRefresh()` belongs in `main.cpp`,
-  beside `CQmsStyle::install()`, once per application — qmaptool needs it too. Do not extend the
-  sweep further; anything else belongs in the owning widget's `changeEvent()`.
-
-Everything below is why a given surface needs rebuilding at all:
-
-- **Never cache a themed colour in a member.** Resolve in the apply path. A cached one is stuck on
-  the scheme it was built under and looks correct until the user switches.
-- **A brush put on an item view's item is resolved once** and outlives a scheme switch, so the view
-  must rebuild the affected rows (`CTableTrk`). Plain rows around them switch on their own, which
-  makes the mismatch easy to miss.
-- **Every map layer paints into a buffer rebuilt only on demand**, so nothing themed on the canvas
-  follows a switch by itself. `CCanvas::changeEvent` forces `slotTriggerCompleteUpdate(eRedrawAll)`
-  — per canvas, not the static `triggerCompleteUpdate()`, which reaches only the visible one.
-- **A `QTextBrowser` cannot be repaired generically.** `setHtml(toHtml())` re-parses the baked
-  colour and changes nothing; the original markup has to be supplied again. Subclassing does not
-  help either — `QTextEdit::setHtml()` is not virtual, so an override would only shadow it.
-- **`setPalette()` freezes only the roles in the palette's resolve mask.** Build a fresh `QPalette`
-  and set just the role you own; every other role keeps following the application palette.
-  `setPalette(QPalette())` clears the override. A copy of `palette()` carries `resolveMask 0` and is
-  a harmless no-op — the freeze comes from the `setColor()`, not the copy. `QFont` behaves the same
-  — express an underline or weight as a bare `QFont` with only that attribute set.
-- **A `.ui` `<palette>` override lands before the constructor body runs** and freezes the same way.
-  `alpha="0"` on `Base`/`Window` is the transparent-field idiom and is fine; an opaque colour in any
-  group is not.
-- **`setPalette()` replaces the widget's own override, it does not merge into it** — including the
-  one `setupUi()` applied. So a widget that sets its own palette cannot take any role from a `.ui`
-  `<palette>`: `CLineEdit` owns the transparent `Base`/`Window` itself, and the `<palette>` blocks
-  on `lineName` in the four `IDetails*.ui` are inert leftovers.
-- **`setTextColor()` is deliberately outside the rule.** It colours the text appended after it,
-  which is the shell-transcript idiom: those lines keep the scheme they were written in on purpose
-  (`CShell`, `IToolShell`, and the tool/BRouter output browsers).
-
-### Checked-state cues — `CQmsStyle`
-
-`CQmsStyle` (`src/common/theme/`) is a `QProxyStyle` installed by `CQmsStyle::install()` from both
-`main.cpp`. It marks the checked state of toggle tool buttons (`PE_PanelButtonTool` + `State_On`)
-and checkable menu items (`CE_MenuItem`), which every style draws too faintly to read on a dark
-palette.
-
-- **Paint a themed cue in a style, never in a style sheet.** A style resolves at paint time, so it
-  follows the palette, cannot go stale and needs no opt-in. An app style sheet using `palette()`
-  resolves once, re-polishes every widget on re-apply, and that re-polish echoes another palette
-  event.
-- **`install()` re-creates the active style by name** — `setStyle()` deletes the style it replaces,
-  so the running one cannot be the base. That is what preserves `-style` / `QT_STYLE_OVERRIDE`.
-- **Paint the menu tint before delegating to the base**, or it dims the text it marks; `CE_MenuItem`
-  fills the row only when selected. Checked rows also go bold, so the cue is not colour alone.
-- **Resolve a cue's colour through `cueColorGroup()`, never the palette's current group.** The
-  current group turns `Inactive` while the window is not the active one, and KDE's
-  `[ColorEffects:Inactive] ChangeSelectionColor` mutes `Highlight` to near the button face there
-  (measured `#1b4155` on `#292c30`), so a cue drawn with the one-argument `color()` overload
-  disappears whenever the app loses focus. A cue marks state, not focus, so `Active` is pinned and
-  only the disabled dimming is kept.
-- **Never fill a checked button with `Highlight`** — `ink` drops to ~1.3:1 on it. A border over the
-  untouched face keeps ~4.9:1.
-- **Menus resist style sheets:** Qt ignores `QMenu::item:checked`, and `QMenu::indicator` needs an
-  `image:`, which for a `.svgt` bypasses `CSvgtIconEngine` and renders black.
-
-### Canvas and printing
-
-- **An info bubble on the canvas is chrome, not map surface — it follows the palette.** Background
-  `CDraw::bubbleBackground()` (`QPalette::Window`), rich text `CDraw::drawBubbleText()`.
-  `CDraw::bubble()` applies the background itself and takes no colour; `CDraw::infoPanel()` is the
-  pointer-less panel (doc + frame + text in one call, leaving the painter translated).
-  `QTextDocument::drawContents()` ignores the painter's pen and takes plain text from
-  `QPalette::Text`, so it cannot be used here. Anchors take `QPalette::Link` at `setHtml()` time and
-  a `PaintContext` cannot override it — a bubble that is not palette-backed needs an `a { color: }`
-  default style sheet set *before* the markup is parsed.
-- **An `IScrOpt` overlay draws its sheet with `CDraw::bubbleBackground()`, resolved in `draw()`** —
-  the table and `.svgt` toolbar icons on it follow the palette, so a white sheet strands them.
-- **`CDraw::text()` haloes in white.** That is for text over map tiles, where the halo is what makes
-  any colour readable; on a solid themed bubble it glows. Paint there with a plain `drawText()` and
-  `CMainWindow::self().getMapFont()` (`CGisItemTrk::drawLimitLabels`).
-- **Printing:** `const CUiTheme::CForceLight paperColours(printable)` in `CDetailsPrj::draw()`,
-  beside the two palette branches it completes. It does not touch `QPalette`, so palette colours
-  still need their own paper branch.
-- `QTextBrowser` applies a `<link>`ed stylesheet (`loadResource`, `StyleSheetResource`), so
-  `CHelpBrowser::loadResource()` appends a themed `code, pre` rule to whatever the packaged help
-  ships. That CSS lives outside this repo; `Role::Code`'s light arm matches its `code` background,
-  so light mode renders unchanged.
-- `paletteIsDark()` is `inline` in `CUiTheme.h` so `CSvgtIconEngine::roleColor()` can share it with
-  nothing to link (the plugin needs only `target_include_directories(svgticonengine PRIVATE ..)`).
-  It is for that plugin and for `CUiTheme::isDark()` alone — **app code branches on
-  `CUiTheme::isDark()`**, which is the same test plus the `CForceLight` override. Never write a
-  third copy of the threshold; it drifts silently.
-
-### Deliberately light — do not "fix"
-
-- **`IPlot`'s sheet is white in every theme.** `eModeNormal` and `eModeSimple` both
-  `fillRect(rect(), Qt::white)`; waypoint icons are painted straight onto it and are unthemable
-  raster symbols authored for a light ground. A themed panel around a white plot is intended
-  (`CScrOptRangeTool`).
-- `CShell`/`IToolShell` colour each line as it is appended, so lines already in the log keep the
-  scheme they were written in.
-- The halo under `CWksItemDelegate`'s progress bar and `CIconGrid`'s tiles are white by design.
-- `CIconGrid`, `CScrOptUnclutter`, `CPrintDialog`, the qmaptool overlays and `CMapIMG` are
-  self-consistent light surfaces. `CDetailsOvlArea`'s white brush-style swatches are the neutral
-  ground a pattern preview wants.
-- **A hardcoded colour is a defect only once its contrast fails against both arms.** A mid-grey such
-  as `Qt::darkGray` clears `#efefef` and `#353535` alike, and white is a legitimate neutral ground
-  for a swatch or preview tile. Work out both grounds before filing one.
-
-### Exercising a live scheme switch
-
-`plasma-apply-colorscheme BreezeDark` with the app running, and `QT_QPA_PLATFORMTHEME` unset — on
-`qt5ct` the Qt 6 platform theme never loads and no scheme change reaches the app.
-
-Good probe: a DEM property panel with "Enable color shading" on and the grades combo at its **last**
-entry, where the slope spins go read-write and underlined in `Role::eInfo`. The panel is cached on
-the DEM (`IDem::getSetup()`), so it holds a stale scheme until the DEM is unloaded.
+Following a live scheme switch, `CQmsStyle` cues, canvas and printing, the surfaces that stay light on
+purpose and how to test a switch: `src/common/theme/CLAUDE.md`.
 
 ---
 
@@ -539,28 +565,12 @@ user-added" test — converting needs a settings migration plus an `isUserDefine
 
 ### SVG line endings are pinned to LF
 
-`.gitattributes` pins `*.svg`, `src/icons/svg.sha256` and `src/icons/svghygiene` to `text eol=lf`
-because `cmake/IconHygiene.cmake` compares `file(SHA256)` of each **working-tree** `.svg` against
-`src/icons/svg.sha256`. One CR changes the hash, and the build reports every icon as edited and
-demands inkscape + python3.
-
-**A blob committed with CRs cannot be cleaned by `checkout`/`restore`.** `eol=lf` normalises on the
-way *in*, never on the way out, so the CRs land in the working tree while diff normalises the file
-back — those paths report as modified forever, and any merge that touches them refuses to start
-before doing anything. Only a commit carrying LF blobs fixes it.
-
-When the local branch is a strict ancestor of the incoming one and the only dirt is that CR churn,
-the merge is a fast-forward blocked by nothing real: `git reset --hard <remote>/<branch>`.
-
-The same trap runs the other way for `*.bat`/`*.cmd` (`text eol=crlf`): a blob committed with CRLF
-before the attribute existed reports permanently modified, because git normalises the working-tree
-copy to LF and compares against the CRLF blob. `git checkout` and `git stash` — including
-`rebase --autostash`, which leaves a half-built `.git/rebase-merge/` behind when it fails — cannot
-clear it. To rebase without committing anything, put `<path> -text` in `.git/info/attributes`
-(local, untracked, beats the tracked `.gitattributes`), rebase, delete it, then
-`rm <path> && git checkout -- <path>` so the file is re-materialised with the attribute's endings.
-`git ls-files --eol '*.bat'` lists the offenders: `i/crlf` is a blob still awaiting
-`git add --renormalize`. `msvc_64/build_routino.bat` is one.
+`cmake/IconHygiene.cmake` hashes each working-tree `.svg` against `src/icons/svg.sha256`, so
+`.gitattributes` pins them `eol=lf`; one CR makes every icon look edited. A blob committed with CRs
+stays modified forever (`eol` normalises only on the way in); only a commit of LF blobs fixes it, and
+if it blocks a fast-forward, `git reset --hard <remote>/<branch>`. `*.bat`/`*.cmd` (`eol=crlf`) have
+the reverse trap: to rebase past one, put `<path> -text` in `.git/info/attributes`, rebase, remove it,
+then `rm <path> && git checkout -- <path>`. `git ls-files --eol '*.bat'` lists offenders (`i/crlf`).
 
 ### Nothing that stores an icon path may be pruned
 
@@ -576,7 +586,8 @@ History icons are **PNG on disk, `.svgt` in memory**: `displayIconPath()` resolv
 load, `savedIconPath()` converts back on save, and neither marks the item changed. A saved file
 stays readable by a build without the icon engine, where a `.svgt` path renders blank.
 
-The `comment` column keeps its PNG paths — it exists for full-text search and is never rendered.
+The `comment` column keeps its PNG paths: it serves full-text search, and its tooltip strips
+`<img>`.
 
 ### Drawing rules no tool catches
 
@@ -602,24 +613,21 @@ Qt has no SVG recolouring API, so `CSvgtIconEngine` rewrites the SVG text and lo
   renders **nothing**; lowercase `currentcolor` is black (QTBUG-46947); a `<style>` class beats a
   root `color=`, so the KDE/Breeze idiom does not mix with ours.
 - `QSvgRenderer` **ignores a class-supplied `fill:`**. `recolored()` inlines the resolved fill as a
-  presentation attribute; without it 19 icons render black.
+  presentation attribute; without it those icons render black.
 - Qt ignores `markerUnits="strokeWidth"`, so `svghygiene` bakes markers into geometry. Set
   `stroke:none` wherever `stroke-width` is 0 **first**, or the shape becomes a filled block.
-- `QIcon(":/x.svg")` needs both `imageformats/qsvg` and `iconengines/qsvgicon` deployed; all three
-  platforms are confirmed OK.
-- Qt 6.10.0 has a `currentColor` regression, fixed in 6.10.1 (QTBUG-141102).
+- `QIcon(":/x.svg")` needs both `imageformats/qsvg` and `iconengines/qsvgicon` deployed.
+- Qt 6.10.0 breaks `currentColor` (QTBUG-141102); use 6.10.1 or newer.
 
-Dark `ink` is `#9999ff`: it must stay legible on `paper` `#353535` at 4.5:1 while staying clear of
-`lead` `#e0e0e0` (120 icons paint both) and `mark` `#66aaff` (19 icons paint both). That rules out
-the azure family — a "more vibrant blue" means a more saturated navy, not a different blue.
+Dark `ink` is `#9999ff`: legible on `paper` `#353535` at 4.5:1 and distinct from `lead` `#e0e0e0`
+and `mark` `#66aaff`, which icons paint beside it. A "more vibrant blue" means a more saturated
+navy, not azure.
 
 ### Waypoints are data, not chrome
 
-`src/icons/waypoints/` is named by the GPX `<sym>` vocabulary shared with Garmin and its exact look
-is a frozen contract, so it **stays PNG on the canvas**: SVG would hand rendering to whichever Qt
-the user has, and a Qt antialiasing change could silently restyle accepted iconography. External
-user icons are PNG/BMP forever (`CWptIconManager`), so the raster path must exist anyway. Dark
-theming does not apply — they sit on map tiles, not the UI palette.
+`src/icons/waypoints/` follows the GPX `<sym>` vocabulary and its look is frozen, so it **stays PNG
+on the canvas**; user icons are PNG/BMP (`CWptIconManager`) anyway. No dark theming: they sit on map
+tiles.
 
 A waypoint symbol used as **UI chrome** (menu action, tool button) is under none of that and uses
 the SVG. Only `FlagBlue.svg` and `PinBlue.svg` are registered; add others as UI needs them.
@@ -635,16 +643,37 @@ waypoint resolution at all. `getWptIconScaledByName` holds `focus = focus * scal
 
 ### GIS item icons — serialization stores sym/colour, not the icon
 
-`.qms`/DB persist the **symbol name** (`wpt.sym`) and the **colour** (`trk.color`/`area.color`),
-never a rendered icon. The icon is re-derived on load: waypoint via `getWptIconByName(sym)`,
-track/area by loading `Track.png`/`Area.png` as a shape mask and filling it with the data colour.
-The rendered pixmaps in the DB `items.icon` BLOB and `.qms` `history_event_t.icon` are output
-caches. **Serialization does not constrain the source format.**
+`.qms`/DB store the symbol name and the colour; icons are re-derived on load, and `items.icon` is a
+cache. Only the waypoint symbol is a frozen raster: the track/area PNGs are silhouette masks and can
+become SVG rendered at size.
 
-So only the waypoint symbol is a genuinely frozen raster. **Tracks and areas can be SVG**: their PNG
-is only a silhouette mask (`createMaskFromColor`), so an SVG rendered at the target size gives a
-crisp mask and the same data colour. `QIcon` will not upscale a raster, so such a change must render
-the SVG at size rather than wrap the old 32px PNG.
+---
+
+## Tile cache
+
+`CDiskCache::cleanupRemovedMaps()` (from `CMapDraw::loadMapList()`) **deletes the cache directory of
+every map the configuration does not know**, and `defaultCachePath()` ignores `--config`. A scripted
+run must call `CMapDraw::setCacheRoot()` and `CGisListWks::setDatabasePath()` before `CMainWindow`,
+or it prunes the user's tiles and empties their workspace.
+
+`setCacheRoot()` pins the root: `Canvas/cachePath` in the configuration no longer applies. A doc run
+takes `CShotFiles::tileCache()`: `doc/shots/_cache`, or `_cache/pages/<page>` when the page's fixture
+has maps of its own, since each run deletes the caches of maps it does not load. A doc run without
+`--config` is refused (`CShotEntry::prepare()`): it would write the user's settings.
+
+**A failed tile is a hole until the `CDiskCache` is replaced.** A failed or undecodable reply, or a
+cache file that does not load, stays in `cache` as the 256 px transparent dummy. Keep it there:
+without it `contains()` is false and a failing server redraws forever; a null image would set
+`tileSizePx` to 0. `restore()` returns false for a hole, `CMapTMS`/`CMapWMTS::draw()` count holes
+per draw (`failedTiles()`), and learn `tileSizePx`/`tileScale` only from real tiles — learned from a
+hole, a 512 px source flips it every draw.
+
+### The map list outlives its `CMapDraw`
+
+`mapList` is parented to the canvas but deleted via `CCanvas::destroyed` → `deleteLater`, while
+`CMapDraw` dies with the canvas, so until the next event loop turn every `CMapItem` holds a dangling
+`CMapDraw* map`. Anything a `CMapItem` queues must watch its owner — `loadConfig()`'s 100 ms deferred
+activation carries a `QPointer<CMapDraw>`. `CPrintDialog`'s short-lived canvas hits it.
 
 ---
 
@@ -659,24 +688,19 @@ loses its close button too. Every docker in both apps must keep `DockWidgetClosa
 ## Minimum sizes — a preference is not a requirement
 
 Qt enforces `minimumSizeHint()` on a window with a layout, so anything that inflates it decides the
-smallest the main window can be. The track details page once pinned it to 1648x717 — unusable on a
-1366x768 screen — through four separate places that read a *preferred* width as a *required* one.
-All four are easy to write again:
+smallest the main window can be. Each of these reads a *preferred* width as a *required* one:
 
 - **A `QLabel` without `wordWrap` reports its whole unwrapped string as a minimum.** With `wordWrap`
-  it reports its widest word — 436 → 52 for one filter label. Qt 6 turns `hasHeightForWidth()` on by
-  itself there; the `setSizePolicy()` line usually recommended alongside is measured to change
-  nothing. Give any label holding a sentence `wordWrap`, especially one whose text is set at runtime
-  or translated: `labelInfo`'s minimum used to move with the interface language.
+  it reports its widest word. Give any label holding a sentence `wordWrap`, especially one whose
+  text is set at runtime or translated.
 - **`QSplitter` sizes a child through `qSmartMinSize()`**, which takes `qMax(sizeHint,
   minimumSizeHint)` unless the child's size policy carries a `ShrinkFlag`. `MinimumExpanding` and
-  `Minimum` have none, so the child's preferred width becomes a hard floor — 222 px of the details
-  page. Use `Expanding` or `Preferred` for a splitter child that may shrink.
+  `Minimum` have none, so the child's preferred width becomes a hard floor. Use `Expanding` or
+  `Preferred` for a splitter child that may shrink.
 - **A `QTreeWidget` row is as high as the item's size hint, which does not follow the width.** A
   wrapped label in an item widget is clipped as the tree narrows; recompute the item size hints from
   `heightForWidth()` on resize, as `CDetailsTrk::updateFilterRowHeights()` does.
-- **A combo box beside a field frame adds both widths.** Stacking it above cost the speed filters
-  nothing and saved 190 px.
+- **A combo box beside a field frame adds both widths**; stack it above instead.
 
 Measure before believing any of this of a given widget: walk the tree printing `minimumSizeHint()`,
 and remember that a `sizeHint()` is what the widget *wants*.
@@ -698,24 +722,14 @@ Multi-byte formats (`Format_ARGB32`) are unaffected since `width * 4` is always 
 
 ### Warped VRT — transparency outside the source footprint
 
-`GDALAutoCreateWarpedVRT` resamples onto an axis-aligned bounding box around the reprojected
-footprint, so corners with no source coverage exist whenever the source isn't already axis-aligned
-with the target SRS. What fills them depends on the path:
+`GDALAutoCreateWarpedVRT` warps onto an axis-aligned box, so a source not aligned with the target
+SRS has uncovered corners:
 
-- **Single-band palette/gray (`CMapVRT`)** — handled. If the source declares a nodata value, GDAL
-  uses it as both src/dst nodata (we never set `padfSrcNoDataReal`/`padfDstNoDataReal`), so
-  uncovered pixels come back as that index and the constructor zeroes its alpha in the colortable.
-  With no source nodata there is no automatic transparency; `Format_Indexed8` has no alpha channel
-  to retrofit one.
-- **Multi-band RGB(A) without its own alpha band (`CMapVRT`)** — handled by a synthetic destination
-  alpha band (`GDALWarpInitDefaultBandMapping` + `psOptions->nDstAlphaBand = nBandCount + 1`,
-  mirroring `gdalwarp -dstalpha`). The warp tracks per-pixel source coverage into it;
-  `rasterBandCount` is re-read from the warped dataset afterwards so `draw()`'s band loop picks it
-  up. Without it, uncovered corners come back solid black — GDAL's own warp fill, which
-  unconditionally overwrites the `img.fill(white)` pre-fill in `draw()`.
-- **`CDemVRT`** — no handling. Uncovered elevation samples read back as whatever the destination
-  buffer was zero-initialised to (not `NOFLOAT`); `getElevationAt()`/`draw()` never check warp
-  coverage. Only matters for non-axis-aligned DEM sources. **Open.**
+- **Palette/gray (`CMapVRT`):** a source nodata value becomes src and dst nodata, and the
+  constructor zeroes its alpha in the colortable. Without source nodata there is no transparency.
+- **RGB(A) without alpha (`CMapVRT`):** a synthetic destination alpha band (`nDstAlphaBand`, as
+  `gdalwarp -dstalpha`); `rasterBandCount` is re-read afterwards. Without it the corners are black.
+- **`CDemVRT`:** not handled; uncovered samples read back zero-initialised, not `NOFLOAT`. **Open.**
 
 ### Blank hillshade when zoomed out
 
@@ -746,189 +760,34 @@ Used by the BRouter installer only.
 
 ---
 
-## Overview-advisory system
+## Folder watcher — `CFolderWatcher`
 
-Warns when a VRT-backed map/DEM has missing or inadequate GDAL overview pyramids, or too many
-source files, and can fix both.
+Maps, DEMs, POIs, Routino and surface DBs reload through it. `QFileSystemWatcher` never adds a missing
+path and drops a folder once it is removed or unmounted, even if it is back already; `updateWatch()`
+re-adds against `watcher.directories()` and a timer checks missing folders until they appear. A
+configured mount point stays an empty folder while unmounted, so its mount is not noticed.
+Test mounts without root through FUSE: `gocryptfs -init`, mount and `fusermount -u` a scratch folder
+while `build/bin/qmapshack -n -d -c <conf>` runs offscreen (`unshare`/`bwrap` are blocked by AppArmor).
 
-**Files:**
-- `helpers/COverviewAdvisory.{h,cpp}` — the whole concept: `advice_t`, `file_info_t`,
-  `geometry_t`, `read_deadline_t`, `probe()`, `setGeometry()`, `onRenderTimeout()`, suppression
-- `helpers/CGdalVrtUtil.{h,cpp}` — small GDAL conveniences only (`closeDataset()`, `isFileUtf8()`,
-  `allReferencedFilesExist()`, `toMeters()`, `progressCallback()`). Nothing advisory lives here
-- `helpers/CVrtAdvisoryDialog.{h,cpp}` + `.ui` — the fix/info/combine dialog
-- `helpers/CVrtCombiner.{h,cpp}` — "Combine files..." grid-split/footprint logic
-- `dem/CDemVRT.{h,cpp}`, `map/CMapVRT.{h,cpp}` — each hold one `COverviewAdvisory advisory` and no
-  advisory state of their own
-- `dem/CDemWCS.cpp` — opts out via `advisory.setEnabled(false)`
-- `map/IMap.h`, `dem/IDem.h`, `map/IMapItem.h`, `map/CMapItemDelegate.{h,cpp}` — badge + on-demand info
-- `map/CMapItem.cpp`, `dem/CDemItem.cpp`, `map/CMapList.cpp`, `dem/CDemList.cpp` — context-menu entry
-- `canvas/CCanvas.cpp` — owns and shows the dialog
+## Subsystem notes elsewhere
 
-**Invariant: the dataset is always a VRT.** `new CMapVRT`/`new CDemVRT` happen only for `.vrt`
-files; every other format has its own class, and `CDemWCS` opts out. `probe()` relies on this —
-there is no "concrete raster format" branch.
+Loaded when files there are touched; read them before working on the subsystem from outside.
 
-**Invariant: the advice is immutable per instance.** Any DEM/map list change — including a
-successful Fix/Combine (`sigContainerRebuilt` → `setupDemPath`/`setupMapPath`) — destroys the
-instance and creates a new one that probes again; nothing updates in place. `probe()` caches
-`needsAttention()` so the delegate's per-paint badge poll (`showsWarning()`) is O(1) instead of
-walking `perFileInfo`.
-
-**Trigger:** `draw()` wraps `ReadRaster()` with a 5 s deadline (`read_deadline_t` + GDAL's own
-progress-abort hook — do not add a second warp-options progress callback, it froze the UI). On
-timeout `onRenderTimeout()` fires the advisory (render thread → GUI thread) once per loaded
-instance per session, and only when `showsWarning()` — the same condition as the proactive tree
-badge.
-
-**Never request a redraw from a timeout path.** The view is unchanged, so the retry hits the same
-deadline and retries again — `emitSigCanvasUpdate()` → `slotTriggerCompleteUpdate()` → `update()` →
-draw thread, unthrottled. On a dataset that stays slow that is an unbounded loop, seen as a
-never-finishing calculation with a blinking layer bar.
-
-**The dialog is application-modal** (`setModal(true)`): while it is open the map/DEM it is about
-must not be read. A pan's `draw()` or a mouse-move's `getElevationAt()` racing a Fix/Combine file
-rewrite (an external gdaladdo/gdalbuildvrt process — the in-process dataset mutex cannot guard it)
-crashes GDAL. Modal blocks user input; a background redraw from a sibling layer during a job is a
-known unguarded residual.
-
-### `COverviewAdvisory::probe(dataset, band, isPaletteIndexed, maxFactor)`
-
-A read can be sped up by two additive sources: the container's own overview, and each source file's
-own overview for the region read.
-
-1. The container's claim is trusted immediately only if a real `.ovr` file is in `GetFileList()`; a
-   bare `<OverviewList>` is not trusted yet.
-2. If the verified container factor already meets `targetFactor`, every source file is skipped
-   (`perFileInfo` still lists them, `checked=false`).
-3. Otherwise every source is probed. An unverified `<OverviewList>` becomes trusted if *every*
-   source turns out to have its own overview; otherwise it is discarded.
-4. `weakestMaxFactor = max(containerFactor, weakestSourceFactor)`.
-
-`containerHasOwnOvr` is true only via step 1; a `checked=false` entry always implies
-`containerHasOwnOvr == true`.
-
-**Factors are per-file pixel ratios (`fullResSize / overviewSize`)**, read from each file's own band
-before any warp — no geotransform/CRS math, even when sources and container differ in CRS.
-
-### A "source file" is a leaf raster, not what `GetFileList()` returns
-
-`GetFileList()` reports **one level only**. Sources with heterogeneous projections are commonly
-wrapped one `gdalwarp -of VRT` each and then `gdalbuildvrt`-ed, so the container's sources are
-themselves VRTs. `collectLeafSources()` follows those down to the real rasters; `perFileInfo`,
-`filesToFix()`, the subfile count and the disk-usage sum all run on the leaves.
-
-Measured on GDAL 3.12:
-
-- **`gdaladdo` on a warped VRT builds nothing.** It ignores `-ro`, writes `<OverviewList>` into the
-  `.vrt` itself and exits 0 in ~40 ms. Those overviews are resampled from the source on the fly, so
-  reads still hit the full-resolution leaf — and `probeSource()` reads the declaration back as
-  sufficient, clearing the badge for good. On a **plain** VRT the same command builds a real
-  `.vrt.ovr`.
-- **A warped VRT needs no `<OverviewList>` of its own** — it reports its source's overviews. Never
-  add a step that writes one into an intermediate VRT.
-- Leaf `.ovr` is the only thing that matters. 10000×10000 warped source, full extent into a 1200 px
-  buffer: 1.20 s bare, 0.41 s with the fake `<OverviewList>` alone, 0.03 s with a real leaf `.ovr`.
-
-A nested VRT with its **own** `.ovr` is a leaf — real data, the rule step 1 applies to the container.
-Nesting alone is not a defect: a VRT-of-VRTs over leaves with overviews is the fastest layout above,
-so never warn on the nesting itself.
-
-`isVrtFile()` asks `GDALIdentifyDriver()` (header sniff, ~5 µs), not the file extension.
-
-### "Fix overviews"
-
-`fixPlan()` is the single source for the after-fix table, the summary counts, the confirmation
-dialog, the gdaladdo queue and the failure cleanup. It returns `{path, action}` steps —
-`BuildNew`/`CleanRebuild` on a source raster, `AddList`/`UpdateList` on the container. Never derive
-any of those five from `perFileInfo` again; that is how they drift apart.
-
-`slotFixOverviews()` / `finishFixOverviews()`:
-
-1. `gdaladdo` runs on every source short of `suggestedLevels` (or on `filename_` itself if there are
-   no source files). Recipe: `-r` (nearest for palette, average otherwise),
-   `COMPRESS_OVERVIEW=DEFLATE`, plus `PREDICTOR_OVERVIEW=2` for non-palette data — matches the
-   source predictor for a ~2–3× smaller `.ovr`, harmful on palette indices. `.ovr` block size is
-   inherited from each source automatically.
-2. `fixContainerOverviewList()` rewrites just the `<OverviewList>` element to
-   `advice_.suggestedLevels` — no full `gdalbuildvrt` re-run, no re-probe. Container steps carry no
-   command; they are this XML edit.
-
-### "Combine files..." (`CVrtCombiner`)
-
-Rewrites the container VRT to reference a handful of large compressed/tiled GeoTIFFs instead of many
-small sources.
-
-- **Splits the container's own resolved raster**, not the source files — `computeGrid()` cuts a plain
-  pixel-window grid (`pixel_window_t`, row/col-tagged). The merge step is a pure crop
-  (`gdal_translate -srcwin`), no resampling.
-- **Layout comes from the VRT XML, no pixel reads.** `readVrtLayout()` parses `<VRTDataset
-  rasterXSize/rasterYSize>` and every source's `<DstRect>` footprint. `tightenToFootprints()` crops
-  each cell to the bbox of the footprints overlapping it, or drops it (`empty()`) if none does.
-  Resolves in ms even for a huge VRT, so it runs inline on the GUI thread — no background scan,
-  `CThread` or `QProgressDialog`.
-- `kMaxOutputTiles` (40) and `kMaxPixelsPerTile` (150,000,000) are **tuning placeholders**, not
-  settled values — they need real tuning against a large VRT.
-- `slotCombineFiles()` reads the layout, computes and tightens the grid, confirms with the user,
-  backs `filename_` up to `filename_ + ".bak"`, runs one `gdal_translate -srcwin` per tile into the
-  *source files'* directory (`group_r<row>_c<col>.tif` — which can differ from the VRT's own
-  directory), then one `gdalbuildvrt -overwrite`. Compression `COMPRESS=DEFLATE`/`PREDICTOR=2` (not
-  ZSTD — not a mandatory GDAL dependency), `TILED=YES`, `BLOCKXSIZE`/`BLOCKYSIZE=512`,
-  `BIGTIFF=IF_SAFER`.
-- **Offered only when every source sits in one directory** (`sharedSourceDir()`). Tiles are written
-  beside the sources and the container is rewritten to reference them, so sources spread over
-  several directories have no right answer — the button is withdrawn and the warning says why.
-  *Fix overviews* has no such limit: each `.ovr` lands beside its own source wherever that is.
-- `JobKind` (`FixOverviews`/`Combine`) dispatches `slotJobFinished()` to `finishFixOverviews()` /
-  `finishCombine()`; both emit `sigContainerRebuilt()` on success.
-- **Non-destructive:** original sources are never deleted. On cancel/failure `filename_` is restored
-  from `.bak` (only the final `gdalbuildvrt -overwrite` touches it) and partial tiles are removed.
-- **Limitations:** footprint tightening trims only the nodata border *between* sources, not nodata
-  inside one; re-running Combine with a different grid size can leave stale `group_rX_cY.tif` files.
-
-### Subfile count, disk usage, dialog
-
-- **Subfile-count check** (independent of overviews): `hasTooManySubfiles()` flags a VRT with more
-  than `kMaxSubfileCount` (50) sources — GDAL opens and stats every source overlapping a read
-  region, so reads stay slow regardless of overviews. `needsAttention()` is
-  `needsOverviewFix() || hasTooManySubfiles()`; the two problems have independent fixes and
-  independent gating.
-- **Disk usage** (`diskUsageBytes`/`diskUsageIsEstimate`): the real on-disk footprint, summed with
-  `QFileInfo` over `GetFileList()` plus each source's `.ovr`/`.aux.xml` sidecars (`GetFileList`
-  omits *source* sidecars, includes only the container's own). Fully qualified → exact; shallow,
-  missing or no overviews → sub-files × 5/3, flagged as an estimate. Formatted with
-  `QLocale::DataSizeSIFormat` to match `du --si`, not the 1024-based IEC default.
-- **Dialog table:** the container is a synthesized row graded by the same `rowStatus()` as source
-  rows. `htmlTd()` and friends are static methods (not free functions) so they can call `tr()`; pass
-  plain `<`/`>` into them, they escape it themselves. `hasExistingOverviews()`'s container fallback
-  keys off `containerHasOwnOvr` (not `containerFactor > 0`) so the "Update" / "Add `<OverviewList>`"
-  wording agrees with the fix confirmation dialog.
-- **Table sizing:** `sizeTableBrowser()` sizes every table browser, capped at `kMaxTableWidth` (900)
-  and `kMaxTableHeight` (250); past either the browser scrolls and the dialog keeps its size. Pass
-  it the narrow-tag HTML: `idealWidth()` on the `width="100%"` variant returns the widget width, not
-  the content. Row counts include the header row, plus the container's synthesized row for the
-  current-state table.
-- **Confirmations:** the fix plan goes through `confirmList()` (`QDialog` + `QTextBrowser` +
-  `QDialogButtonBox`) because a `QMessageBox` cannot scroll its text. `confirmYesNo()` is a
-  `QMessageBox` and takes plain text only.
-- `raster_geometry_t` comes from `CGdalVrtUtil::sourceGeometry(pre-warp source)` — the source file's
-  own size and resolution, matching `gdalinfo` (exact metres for a projected CRS,
-  `kMetersPerDegree` approximation for geographic). **Not the warped grid**: reading the warped
-  geotransform gives wrong pixel sizes (+26% for a UTM source drawn in EPSG:4326).
-- **Badge and info:** `showsOverviewWarning()` (`!suppress && needsAttention()`) drives the tree
-  badge; `hasOverviewInfo()` drives the "Overview Info..." context-menu entry regardless of
-  attention state. `CMapItemDelegate::overviewBadgeRect()` is shared by
-  `paint()`/`editorEvent()`/`helpEvent()` so painted, clickable and tooltip areas cannot drift.
-- **Lifecycle:** `closeEvent()`/`reject()` both confirm-cancel a running job and clean up partial
-  output. `CCanvas::showOverviewAdvisory()` allows **one advisory at a time, application-wide** —
-  the dialog is `show()`n, not `exec()`d, so the event loop keeps running and modality blocks only
-  user input, never a queued `sigOverviewAdvisory` from another layer's render timeout. It searches
-  from `CMainWindow`, not the canvas, because a second canvas parents its own dialogs. A dropped
-  advisory keeps its tree badge, so the file stays reachable through *Overview Info…*.
+- `src/qmapshack/shoot/CLAUDE.md` — documentation mode (`-DQMS_DOC_MODE=ON`, `doc/tools/shots.py`); its design is
+  `DESIGN.md` beside it.
+- `src/qmapshack/helpers/CLAUDE.md` — the overview-advisory system (VRT overviews, Fix, Combine).
+- `src/common/theme/CLAUDE.md` — colour scheme details.
 
 ---
 
 ## Open work
+
+### Documentation
+
+`.notes/documentation-plan.md`: generated HTML in `doc/html/` replaces `QMSHelp.qch`.
+`.notes/shot-marks-plan.md`: marks in documentation images (QMS-1319); read it first when resuming.
+`.notes/quickstart-plan.md`: step 7, the quick start, done; how a page is made and its open checks. Read it before a new page.
+`.notes/translation-plan.md`: translated documentation, German first; read it first when resuming.
 
 Analysed designs live in `.notes/`, each wanting its own branch. De-freeze one by pointing at the
 file.
@@ -944,61 +803,18 @@ file.
   `QT_DEV_PATH`/`ROUTINO_DEV_PATH`/… `FATAL_ERROR` gauntlet can move into `CMakePresets.json`, and
   `MacOSX/build-QMS.sh` and the msvc batch files can call `--preset`. Needs someone who can test
   both release paths.
-- Shared `qms_common` library: ten files under `src/common/` are compiled once per app. Blocker is
-  `src/common/help/CHelp.cpp`'s `"helpers/CSettings.h"`, which resolves per-app; the two copies are
-  byte-identical, so moving that header to `src/common/helpers/` unblocks it.
+- Shared `qms_common` library: eleven files under `src/common/` are compiled once per app. Blocker
+  is `src/common/help/CHelp.cpp`'s `"helpers/CSettings.h"`, which resolves per-app; the two copies
+  are byte-identical, so moving that header to `src/common/helpers/` unblocks it.
 - Confirm on their own platforms that these removals were inert: macOS `LINK_FLAGS`, the
   `-framework` entries in `CMAKE_C_FLAGS` and the three framework include dirs; Windows
   qmt_map2jnx's `Win32/` include dir. `msvc_64/cmake/{FindGDAL,FindPROJ,FindJPEG}.cmake` can go if
   the gisinternals GDAL ships `GDALConfig.cmake`.
-
-### QMS-1156 — convert non-UTF-8 VRT files to UTF-8 on load
-
-GDAL receives filenames as UTF-8 everywhere. A guard rejects `.vrt` files whose bytes aren't valid
-UTF-8, which dead-ends users with legacy Windows-1252/Latin-1 VRTs. Offer a confirmed, `.bak`-backed
-one-click conversion instead.
-
-GDAL facts behind the design (tested on 3.12):
-- The CPL XML parser **ignores the VRT `<?xml encoding?>` declaration** — `<SourceFilename>` bytes go
-  to `open()` verbatim, so even a correctly-declared `ISO-8859-1` VRT fails. Only raw bytes matter,
-  so a byte-level UTF-8 check has no false-rejection risk.
-- On-disk source names are UTF-8, so transcoding a Latin-1 VRT reproduces the real names.
-- GDAL does not hard-fail a bad path: exit 0, checksum -1, `ERROR 4` on stderr — a quietly broken
-  dataset, which is what feeds the missing-file advisory.
-
-Design: transcode from candidate encodings (Windows-1252 → ISO-8859-1 → system ANSI), then **verify
-by resolution** — every `<SourceFilename>` must now exist on disk. First candidate that resolves all
-sources wins, else fall back to plain rejection. Trigger at load time in `CMapVRT`/`CDemVRT`
-construction (a non-UTF-8 VRT never constructs, so the advisory dialog cannot be the entry point),
-reusing the advisory `.bak`/rewrite scaffolding. Not platform-gated — it reproduces on Linux. Also
-rewrite the `<?xml encoding?>` declaration to UTF-8.
-
-### POI icons (SJJB) can be converted to SVG
-
-POIs are not waypoints — no canvas freeze applies. 303 SVGs already ship under
-`src/icons/poi/SJJB/svg/<category>/` and 249 of the 250 referenced PNGs have a counterpart, but none
-are in `resources.qrc`. They are SJJB templates carrying a placeholder fill `#111111` that their
-build recolours per category, so the colour must be recovered per icon from the shipped PNGs
-(16 categories, 6 with 2–3 variants).
-
-Work: register ~250 SVGs, add a recolour step, change `CPoiIconCategory`'s `QPixmap` members to
-paths plus ~302 literals in `CPoiFilePOI_TagMap.cpp` — the path *shape* changes, so that needs a
-lookup table, not a regex — and a render cache keyed by (icon, size, dpr). The cache is a win
-regardless: `CPoiFilePOI` currently `.scaled()`s a pixmap per POI per repaint.
-
-Gate it or do not do it: render each recoloured SVG at 32, diff against its shipped PNG, require
-`visible (>8) == 0`. A diff that measures **colour** reports ~240 false failures.
-
-Two defects found while scoping: `CPoiFilePOI_TagMap.cpp` asks for `health_pharmacy_dispencing`
-(a typo; the SVG is `pharmacy_dispensing`), and one SVG embeds a raster that is not in the tree
-(`pastedpic_10102008_233747.png`).
 
 ### `CDemVRT`/`IDem` rendering speed
 
 - **Open:** batch `getElevationAt()`/`getSlopeAt()` point queries. Each is one small `RasterIO` call
   per point (e.g. per vertex of a track elevation profile) — a different path from `draw()`'s map
   rendering. Worth revisiting only if track-profile performance comes up.
-- **Deliberately skipped:** caching `1/xscale`/`1/yscale` for `slopeOfWindowInterp()`. Modest win,
-  and hoisting needs either a signature change touching its three callers or new cached members with
-  a staleness trap — `xscale`/`yscale` are plain protected members assigned directly, with no setter
-  to keep a reciprocal in sync.
+- **Deliberately skipped:** caching `1/xscale`/`1/yscale` for `slopeOfWindowInterp()`;
+  `xscale`/`yscale` have no setter to keep a reciprocal in sync.

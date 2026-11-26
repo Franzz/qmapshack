@@ -24,20 +24,27 @@
 #include <QMutex>
 #include <QTimer>
 
+#include "poi/CPoiFilePOIQuery.h"
 #include "poi/CPoiIconCategory.h"
 #include "poi/CPoiItemPOI.h"
 #include "poi/IPoiFile.h"
 
+class QSqlDatabase;
+class QSqlError;
+class QSqlQuery;
+
 class CPoiFilePOI : public IPoiFile {
   Q_DECLARE_TR_FUNCTIONS(CPoiFilePOI)
  public:
-  CPoiFilePOI(const QString& filename, CPoiDraw* parent);
+  /** @param fileKey  CPoiFileItem::key, the same on every machine for the same file */
+  CPoiFilePOI(const QString& filename, const QString& fileKey, CPoiDraw* parent);
   virtual ~CPoiFilePOI() = default;
 
   void addTreeWidgetItems(QTreeWidget* widget) override;
   // category, minLon multiplied by 10, minLat multiplied by 10. POIs are loaded in squares of degrees (should be fine
-  // enough to not hang the system)
-  void loadPOIsFromFile(quint64 categoryID, int minLonM10, int minLatM10);
+  // enough to not hang the system). maxLonM10 is the last square of the row in view, used for files without R-tree.
+  // Returns false if the file cannot be read at all, so further squares would only fail the same way.
+  bool loadPOIsFromFile(quint64 categoryID, qint32 minLonM10, qint32 minLatM10, qint32 maxLonM10);
 
   void draw(IDrawContext::buffer_t& buf) override;
 
@@ -63,24 +70,32 @@ class CPoiFilePOI : public IPoiFile {
     QSet<quint64> pois;
   };
 
-  enum SqlColumnPoi_e {
-    eSqlColumnPoiMaxLat,
-    eSqlColumnPoiMaxLon,
-    eSqlColumnPoiMinLat,
-    eSqlColumnPoiMinLon,
-    eSqlColumnPoiData,
-    eSqlColumnPoiId
-  };
   enum SqlColumnCategory_e { eSqlColumnCategoryId, eSqlColumnCategoryName, eSqlColumnCategoryParent };
 
   void getPoiIcon(QPixmap& icon, const poiGroup_t& poiGroup);
   void getPoiIcon(QPixmap& icon, const CPoiItemPOI& poi, const QString& definingTag = "");
   bool overlapsWithIcon(const QRectF& rect) const;
   bool getPoiGroupCloseBy(const QPoint& px, poiGroup_t& poiItem) const;
+  bool loadPoisInSquare(const QSqlDatabase& db, quint64 categoryID, qint32 minLonM10, qint32 minLatM10);
+  bool loadPoisInRow(const QSqlDatabase& db, qint32 minLonM10, qint32 maxLonM10, qint32 minLatM10);
+  /** @brief Prepare a statement; false if the file cannot be read at all, then the squares stay unloaded and are
+   * retried */
+  bool prepareQuery(QSqlQuery& query, const QString& sql);
+  void logUnreadable(const QSqlError& error);
+  /** @brief Report a failed exec() or next(): what was read is kept and the squares count as loaded */
+  void logReadError(const QSqlQuery& query);
+  bool isLoaded(quint64 categoryID, qint32 minLonM10, qint32 minLatM10) const;
+  QList<quint64> poisInSquare(quint64 categoryID, qint32 minLonM10, qint32 minLatM10) const;
+  void addPoi(const QSqlQuery& query, quint64 categoryID, qint32 minLonM10, qint32 minLatM10);
 
   mutable QRecursiveMutex mutex;
   QString filename;
+  CPoiFilePOIQuery::Index index = CPoiFilePOIQuery::Index::eUnsupported;
+  /** What a POI's `file` is: the base name, told apart from a namesake elsewhere by the file's key. */
+  QString fileTag;
   QTimer* loadTimer;
+  QString lastUnreadableError;
+  QString lastReadError;
 
   QMap<quint64, Qt::CheckState> categoryActivated;
   QMap<quint64, QString> categoryNames;

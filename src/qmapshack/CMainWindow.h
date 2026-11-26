@@ -50,6 +50,9 @@ class CMainWindow : public QMainWindow, private Ui::IMainWindow {
 
   static QWidget* getBestWidgetForParent();
 
+  /** @brief Write the window's, the views' and the units' settings; the destructor's, and documentation mode's. */
+  void saveConfig();
+
   QString getHomePath() { return (homeDir.path() != "" && homeDir.exists()) ? homeDir.absolutePath() : ""; }
 
   QString getMapsPath() {
@@ -134,6 +137,8 @@ class CMainWindow : public QMainWindow, private Ui::IMainWindow {
   void sigCanvasChange();
 
  public slots:
+  /** @brief open the tool tab to build surface databases */
+  void slotCreateSurfaceDatabase();
   void slotLinkActivated(const QString& link);
   void slotLinkActivated(const QUrl& url);
   void slotSetupMapView();
@@ -207,6 +212,10 @@ class CMainWindow : public QMainWindow, private Ui::IMainWindow {
   CCanvas* createCanvas(const QString& name);
   void setupHomePath();
   CCanvas* addCanvas(const QString& key);
+  /** @brief The folder holding one subfolder of generated help pages per language. */
+  static QDir helpRoot();
+  /** @brief Open @p page, relative to a language folder, in the GUI's language or else English. */
+  void showHelp(const QString& page);
 
   static CMainWindow* pSelf;
   static QDir homeDir;

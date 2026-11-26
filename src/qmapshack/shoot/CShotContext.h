@@ -1,0 +1,111 @@
+/**********************************************************************************************
+   Copyright (C) 2026 Oliver Eichler <oliver.eichler@gmx.de>
+
+   This program is free software: you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation, either version 3 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+**********************************************************************************************/
+
+#ifndef CSHOTCONTEXT_H
+#define CSHOTCONTEXT_H
+
+#include <QList>
+#include <QPointer>
+#include <QRect>
+#include <QSize>
+#include <QString>
+
+#include "gis/IGisItem.h"
+#include "shoot/CShotMarks.h"
+
+class CCanvas;
+class CGisItemOvlArea;
+class CGisItemRte;
+class CGisItemTrk;
+class CGisItemWpt;
+class CGisListWks;
+class CMainWindow;
+class CShotWriter;
+class IGisProject;
+class QWidget;
+
+/** @brief What a shot writes its images through, and the fixture it is taken against. */
+class CShotContext {
+ public:
+  explicit CShotContext(const CShotWriter& writer);
+
+  /**
+     @brief Start shot @p id.
+
+     @param rect  the crop of every image, invalid for none
+     @param marks  drawn on every image, placed after it is rendered; each must lie inside it and @p rect
+   */
+  void begin(const QString& id, const QRect& rect = QRect(), const QList<CShotMarks::mark_t>& marks = {});
+
+  /**
+     @param size  a window's size, invalid for its sizeHint; ignored for a non-window widget
+     @return false when no image was written
+   */
+  bool shot(QWidget* w, const QSize& size = QSize());
+
+  /** @return the main window, nullptr before it is constructed */
+  CMainWindow* mainWindow() const;
+
+  /** @return the canvas of the map view in front, nullptr when there is none */
+  CCanvas* canvas() const;
+
+  /** @return the workspace tree, nullptr before the main window is constructed */
+  const CGisListWks* wksList() const;
+
+  /** The fixture's items by role, looked up each time; nullptr before CShotFixture loaded them or once deleted. */
+  IGisProject* project() const;
+  CGisItemTrk* trk() const;
+  CGisItemWpt* wpt() const;
+  CGisItemRte* rte() const;
+  CGisItemOvlArea* area() const;
+
+  QList<IGisItem::key_t> keys() const;
+
+  void setFixture(IGisProject* project, CGisItemTrk* trk, CGisItemWpt* wpt, CGisItemRte* rte, CGisItemOvlArea* area);
+
+  /**
+     @brief The scenario the application is in already; a shot taken in it performs none of its steps.
+
+     Empty for none: a build performs every scenario. A step is not idempotent, so a scenario performed on top of itself
+     is another state.
+   */
+  void setLiveScenario(const QString& name) { live = name; }
+  const QString& liveScenario() const { return live; }
+
+ private:
+  /** @return false when the image is refused and nothing was written */
+  bool emitImage(QWidget* w, const QSize& size, const QString& stem) const;
+
+  /** Keys, not pointers: a scenario step can delete an item, and the items are no QObjects. */
+  struct fixture_t {
+    QString project;
+    IGisItem::key_t trk;
+    IGisItem::key_t wpt;
+    IGisItem::key_t rte;
+    IGisItem::key_t area;
+  };
+
+  const CShotWriter& writer;
+  QString id;
+  QRect rect;
+  QList<CShotMarks::mark_t> marks;
+  fixture_t fixture;
+  QString live;
+};
+
+#endif  // CSHOTCONTEXT_H

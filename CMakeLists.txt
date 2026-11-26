@@ -8,7 +8,7 @@ cmake_minimum_required(VERSION 3.20.0)
 # Define project name and version tags
 ###############################################################################################
 # this is not only the QMS version it will be the package version, too.
-project(QMapShack VERSION 1.21.1 LANGUAGES CXX)
+project(QMapShack VERSION 1.22.0 LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # CMAKE_CXX_EXTENSIONS is left at its default ON: the UNIX warning set asks for -fms-extensions,
@@ -71,6 +71,7 @@ option(BUILD_FOR_LOCAL_SYSTEM "Build for local system ONLY (resulting binary mig
 # Off by default on purpose: only a build that is deliberately refreshing the catalogs may run
 # lupdate and rewrite the tracked .ts files.
 option(UPDATE_TRANSLATIONS "Update translation files" OFF)
+option(BUILD_TESTING "Build the unit tests (run them with ctest)" OFF)
 option(UPDATE_TRANSLATIONS_PURGE_OBSOLETE "Remove obsolete translations" OFF)
 
 
@@ -82,6 +83,11 @@ if (APPLE)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -stdlib=libc++")
     # Foundation and DiskArbitration come from find_library below, linked per target. The headers
     # resolve through the implicit framework search path, not an include directory.
+
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        # Suppress "clang++: warning: -framework IOKit: 'linker' input unused"
+        add_compile_options(-Wno-unused-command-line-argument)
+    endif()
 
     if(NOT DEFINED QT_DEV_PATH)
         message(FATAL_ERROR "QT_DEV_PATH not set!!!")
@@ -166,8 +172,12 @@ qms_add_flag_if_supported(-Woverloaded-virtual)
 ###############################################################################################
 # Find all required packages and setup internal variables
 ###############################################################################################
+# Developer only: takes the help pages' images through synthesized input. Selects which files are compiled.
+option(QMS_DOC_MODE "Build the documentation and screenshot subsystem (developer only)" OFF)
+
 # Core5Compat provides QTextCodec, which decodes the Garmin codepages QStringConverter cannot.
 find_package(Qt6 6.8 REQUIRED COMPONENTS
+    Concurrent
     Core
     Core5Compat
     Help
@@ -183,6 +193,14 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS
     Widgets
     Xml
 )
+
+if(QMS_DOC_MODE)
+    find_package(Qt6 6.8 REQUIRED COMPONENTS Test)
+    # Developer-only and never shipped, so being tied to this Qt build is accepted.
+    set(QT_NO_PRIVATE_MODULE_WARNING ON)
+    # Qt6::GuiPrivate comes with Gui in 6.8 and is a package of its own from 6.9 on, required from 6.10.
+    find_package(Qt6 OPTIONAL_COMPONENTS GuiPrivate)
+endif()
 
 qt_standard_project_setup(
     I18N_TRANSLATED_LANGUAGES ca cs de es fr hr it nl ru
@@ -215,6 +233,18 @@ endif()
 
 if(USE_QT6DBus)
     find_package(Qt6 REQUIRED COMPONENTS DBus)
+endif()
+
+if(BUILD_TESTING)
+    find_package(Qt6 REQUIRED COMPONENTS Test)
+    enable_testing()
+endif()
+
+if(APPLE)
+    # macOS has no MTP service, so MTP devices are accessed directly, and found through libusb hotplug
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(LIBMTP REQUIRED IMPORTED_TARGET libmtp>=1.1.21)
+    pkg_check_modules(LIBUSB REQUIRED IMPORTED_TARGET libusb-1.0)
 endif()
 
 # Everything included. Let's finetune the mess a bit more
@@ -301,6 +331,7 @@ add_subdirectory(src/common/svgticon)
 
 if(BUILD_QMAPSHACK)
 add_subdirectory(src/qmapshack)
+add_subdirectory(src/qms_surfacedb)
 endif(BUILD_QMAPSHACK)
 
 if(BUILD_QMAPTOOL)
@@ -308,6 +339,24 @@ add_subdirectory(src/qmaptool)
 add_subdirectory(src/qmt_rgb2pct)
 add_subdirectory(src/qmt_map2jnx)
 endif(BUILD_QMAPTOOL)
+
+###############################################################################################
+# The documentation: "doc" runs doc/tools/generate_html.py, which sets up its own environment in
+# .doc-venv. Not part of "all"; the first run needs internet access.
+###############################################################################################
+find_package(Python3 3.12 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND AND Python3_VERSION VERSION_GREATER_EQUAL 3.12)
+    add_custom_target(doc
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/doc/tools/generate_html.py
+        COMMENT "Generating doc/html"
+        USES_TERMINAL
+        VERBATIM)
+else()
+    add_custom_target(doc
+        COMMAND ${CMAKE_COMMAND} -E echo "No Python 3.12 or newer found: generating the documentation needs it"
+        COMMAND ${CMAKE_COMMAND} -E false
+        VERBATIM)
+endif()
 
 ###############################################################################################
 # Copy a few more files need by the install/unistall target
@@ -318,8 +367,8 @@ if(BUILD_QMAPSHACK)
     install( FILES        src/icons/48x48/QMapShack.png     DESTINATION     ${DATA_INSTALL_PREFIX}/pixmaps )
     install( DIRECTORY    src/icons/qmapshack/hicolor       DESTINATION     ${ICON_INSTALL_DIR} )
     install( FILES        qmapshack.1                       DESTINATION     ${MAN_INSTALL_DIR}/man1  )
-    install( FILES        src/qmapshack/doc/QMSHelp.qhc     DESTINATION     ${HTML_INSTALL_DIR})
-    install( FILES        src/qmapshack/doc/QMSHelp.qch     DESTINATION     ${HTML_INSTALL_DIR})
+    install( FILES        qms_surfacedb.1                   DESTINATION     ${MAN_INSTALL_DIR}/man1  )
+    install( DIRECTORY    doc/html/                         DESTINATION     ${HTML_INSTALL_DIR}/qms)
 endif(BUILD_QMAPSHACK)
 
 if(BUILD_QMAPTOOL)

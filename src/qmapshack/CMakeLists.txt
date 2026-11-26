@@ -140,6 +140,16 @@ set( SRCS
     gis/trk/CTrkToAreaDialog.cpp
     gis/trk/CTrkToRteDialog.cpp
     gis/trk/CTrackData.cpp
+    gis/trk/surface/CPbfReader.cpp
+    gis/trk/surface/CSurface.cpp
+    gis/trk/surface/CSurfaceAnalyzer.cpp
+    gis/trk/surface/CSurfaceBar.cpp
+    gis/trk/surface/CSurfaceDb.cpp
+    gis/trk/surface/CSurfaceDbBuilder.cpp
+    gis/trk/surface/CSurfaceDbManager.cpp
+    gis/trk/surface/CSurfaceDbSet.cpp
+    gis/trk/surface/CSurfaceTrk.cpp
+    gis/trk/surface/CSurfaceWidget.cpp
     gis/trk/filter/CFilterChangeStartPoint.cpp
     gis/trk/filter/CFilterDelete.cpp
     gis/trk/filter/CFilterDeleteExtension.cpp
@@ -180,6 +190,7 @@ set( SRCS
     helpers/CGdalVrtUtil.cpp
     helpers/COverviewAdvisory.cpp
     helpers/CGdalZip.cpp
+    helpers/CFolderWatcher.cpp
     helpers/CInputDialog.cpp
     helpers/CLimit.cpp
     helpers/CLinksDialog.cpp
@@ -274,6 +285,7 @@ set( SRCS
     poi/CPoiDraw.cpp
     poi/CPoiFileItem.cpp
     poi/CPoiFilePOI.cpp
+    poi/CPoiFilePOIQuery.cpp
     poi/CPoiFilePOI_TagMap.cpp
     poi/CPoiIconCategory.cpp
     poi/CPoiItemPOI.cpp
@@ -320,6 +332,7 @@ set( SRCS
     tool/CImportDatabase.cpp
     tool/CMapVrtBuilder.cpp
     tool/CRoutinoDatabaseBuilder.cpp
+    tool/CSurfaceDatabaseBuilder.cpp
     tool/IToolShell.cpp
     units/CCoordFormatSetup.cpp
     units/CTimeZoneSetup.cpp
@@ -334,6 +347,7 @@ set( SRCS
     widgets/CDoubleSpinBox.cpp
     widgets/CFadingIcon.cpp
     widgets/CFadingLabel.cpp
+    widgets/CHelpBlock.cpp
     widgets/CHistoryListWidget.cpp
     widgets/CIconGrid.cpp
     widgets/CLedIndicator.cpp
@@ -361,15 +375,24 @@ set( SRCS
 )
 
 
+if(Qt6DBus_FOUND OR APPLE)
+list(APPEND SRCS
+    device/IDeviceAccess.cpp
+    device/CDeviceGarminMtp.cpp
+    device/CDeviceGarminArchiveMtp.cpp
+)
+endif()
+
+if(APPLE)
+list(APPEND SRCS device/CDeviceAccessLibMtp.cpp)
+endif()
+
 if(Qt6DBus_FOUND)
 set( SRCS
     ${SRCS}
-    device/IDeviceAccess.cpp
     device/CDeviceWatcherLinux.cpp
     device/CDeviceAccessKMtp.cpp
     device/CDeviceAccessGvfsMtp.cpp
-    device/CDeviceGarminMtp.cpp
-    device/CDeviceGarminArchiveMtp.cpp
     device/CDeviceGenericMtp.cpp
     device/dbus/org.kde.kmtp.Daemon.cpp
     device/dbus/org.kde.kmtp.Device.cpp
@@ -526,6 +549,16 @@ set( HDRS
     gis/trk/CTrkToAreaDialog.h
     gis/trk/CTrkToRteDialog.h
     gis/trk/CTrackData.h
+    gis/trk/surface/CPbfReader.h
+    gis/trk/surface/CSurface.h
+    gis/trk/surface/CSurfaceAnalyzer.h
+    gis/trk/surface/CSurfaceBar.h
+    gis/trk/surface/CSurfaceDb.h
+    gis/trk/surface/CSurfaceDbBuilder.h
+    gis/trk/surface/CSurfaceDbManager.h
+    gis/trk/surface/CSurfaceDbSet.h
+    gis/trk/surface/CSurfaceTrk.h
+    gis/trk/surface/CSurfaceWidget.h
     gis/trk/filter/CFilterChangeStartPoint.h
     gis/trk/filter/CFilterDelete.h
     gis/trk/filter/CFilterDeleteExtension.h
@@ -559,12 +592,14 @@ set( HDRS
     grid/CGridSetup.h
     grid/CProjWizard.h
     grid/mitab.h
+    helpers/CClock.h
     helpers/CDraw.h
     helpers/CElevationDialog.h
     helpers/CFileExt.h
     helpers/CGdalVrtUtil.h
     helpers/COverviewAdvisory.h
     helpers/CGdalZip.h
+    helpers/CFolderWatcher.h
     gis/search/CSearch.h
     helpers/CInputDialog.h
     helpers/CLimit.h
@@ -669,6 +704,7 @@ set( HDRS
     poi/CPoiDraw.h
     poi/CPoiFileItem.h
     poi/CPoiFilePOI.h
+    poi/CPoiFilePOIQuery.h
     poi/CPoiIconCategory.h
     poi/CPoiItemPOI.h
     poi/CPoiList.h
@@ -715,6 +751,7 @@ set( HDRS
     tool/CImportDatabase.h
     tool/CMapVrtBuilder.h
     tool/CRoutinoDatabaseBuilder.h
+    tool/CSurfaceDatabaseBuilder.h
     tool/IToolShell.h
     units/CCoordFormatSetup.h
     units/CTimeZoneSetup.h
@@ -730,6 +767,7 @@ set( HDRS
     widgets/CDoubleSpinBox.h
     widgets/CFadingIcon.h
     widgets/CFadingLabel.h
+    widgets/CHelpBlock.h
     widgets/CHistoryListWidget.h
     widgets/CIconGrid.h
     widgets/CLedIndicator.h
@@ -757,16 +795,25 @@ set( HDRS
 )
 
 
+if(Qt6DBus_FOUND OR APPLE)
+list(APPEND HDRS
+    device/IDeviceAccess.h
+    device/CDeviceGarminMtp.h
+    device/CDeviceGarminArchiveMtp.h
+)
+endif()
+
+if(APPLE)
+list(APPEND HDRS device/CDeviceAccessLibMtp.h)
+endif()
+
 if(Qt6DBus_FOUND)
 set( HDRS
     ${HDRS}
     device/CDeviceWatcherLinux.h
     device/CDeviceAccessKMtp.h
     device/CDeviceAccessGvfsMtp.h
-    device/CDeviceGarminMtp.h
-    device/CDeviceGarminArchiveMtp.h
     device/CDeviceGenericMtp.h
-    device/IDeviceAccess.h
     device/dbus/org.kde.kmtp.Daemon.h
     device/dbus/org.kde.kmtp.Device.h
     device/dbus/org.kde.kmtp.Storage.h
@@ -926,6 +973,11 @@ set( RCS
     resources.qrc
 )
 
+# Separate, so a user's binary carries no fonts or icons only a documentation run loads.
+if(QMS_DOC_MODE)
+    list(APPEND RCS shoot/doc.qrc)
+endif()
+
 ###############################################################################################
 # Some Qt magic
 ###############################################################################################
@@ -1028,11 +1080,16 @@ target_compile_definitions(${APPLICATION_NAME} PRIVATE
     VER_STEP=${PROJECT_VERSION_PATCH}
     APPLICATION_NAME=${PROJECT_NAME}
     "HELPPATH=${HTML_INSTALL_DIR}"
+    "QMS_SOURCE_DOC_HTML=\"${CMAKE_SOURCE_DIR}/doc/html\""
     "ROUTINO_XML_PATH=${ROUTINO_XML_PATH}"
 )
 
 if(Qt6DBus_FOUND)
     target_compile_definitions(${APPLICATION_NAME} PRIVATE HAVE_DBUS)
+endif()
+
+if(APPLE)
+    target_link_libraries(${APPLICATION_NAME} PRIVATE PkgConfig::LIBMTP PkgConfig::LIBUSB)
 endif()
 
 if(DEVELOPMENT_VERSION)
@@ -1048,10 +1105,85 @@ else(Qt6DBus_FOUND)
     set(DBUS_LIB)
 endif(Qt6DBus_FOUND)
 
+# Both branches implement the same two headers.
+if(QMS_DOC_MODE)
+    target_sources(${APPLICATION_NAME} PRIVATE
+        shoot/CShotAddress.cpp
+        shoot/CShotAddress.h
+        shoot/CShotApplication.cpp
+        shoot/CShotApplication.h
+        shoot/CShotContext.cpp
+        shoot/CShotContext.h
+        shoot/CShotDocLauncher.cpp
+        shoot/CShotDocLauncher.h
+        shoot/CShotDocMode.cpp
+        shoot/CShotDocMode.h
+        shoot/CShotDocPanel.cpp
+        shoot/CShotDocPanel.h
+        shoot/CShotDocSelfTest.cpp
+        shoot/CShotDocSelfTest.h
+        shoot/CShotDocState.cpp
+        shoot/CShotDocState.h
+        shoot/CShotEntry.cpp
+        shoot/CShotEntry.h
+        shoot/CShotExposures.cpp
+        shoot/CShotFiles.cpp
+        shoot/CShotFiles.h
+        shoot/CShotFixture.cpp
+        shoot/CShotFixture.h
+        shoot/CShotHandlers.cpp
+        shoot/CShotHandlers.h
+        shoot/CShotInput.cpp
+        shoot/CShotInput.h
+        shoot/CShotMarker.cpp
+        shoot/CShotMarker.h
+        shoot/CShotMarks.cpp
+        shoot/CShotMarks.h
+        shoot/CShotOptions.cpp
+        shoot/CShotOptions.h
+        shoot/CShotPage.cpp
+        shoot/CShotPage.h
+        shoot/CShotPrivacy.cpp
+        shoot/CShotPrivacy.h
+        shoot/CShotRecorder.cpp
+        shoot/CShotRecorder.h
+        shoot/CShotRegistry.cpp
+        shoot/CShotRegistry.h
+        shoot/CShotReplay.cpp
+        shoot/CShotReplay.h
+        shoot/CShotSelfTest.cpp
+        shoot/CShotSelfTest.h
+        shoot/CShotsJob.cpp
+        shoot/CShotsJob.h
+        shoot/CShotStep.cpp
+        shoot/CShotStep.h
+        shoot/CShotSynth.cpp
+        shoot/CShotSynth.h
+        shoot/CShotWait.cpp
+        shoot/CShotWait.h
+        shoot/CShotWarnings.cpp
+        shoot/CShotWarnings.h
+        shoot/CShotWriter.cpp
+        shoot/CShotWriter.h
+        shoot/IShotHandler.cpp
+        shoot/IShotHandler.h
+    )
+    # QTest synthesizes input through QWindowSystemInterface; the private one injects a keyboard context menu.
+    target_link_libraries(${APPLICATION_NAME} PRIVATE Qt6::Test Qt6::GuiPrivate)
+else()
+    target_sources(${APPLICATION_NAME} PRIVATE
+        shoot/CShotEntry.h
+        shoot/CShotEntryStub.cpp
+        shoot/CShotOptions.h
+        shoot/CShotOptionsStub.cpp
+    )
+endif()
+
 target_link_libraries(${APPLICATION_NAME} PRIVATE
     qms_options
     svgticonengine
     Qt6::Widgets
+    Qt6::Concurrent
     # Nothing includes a QtSvg header: QIcon(":/x.svg") is served by the qsvg image plugin and
     # the qsvgicon icon engine, both loaded at runtime. Linking the module is what makes
     # windeployqt/macdeployqt detect and ship those plugins. Linux distros package them anyway.
@@ -1105,4 +1237,11 @@ if(WIN32)
         NO_UNSUPPORTED_PLATFORM_ERROR
     )
     install(SCRIPT ${deploy_script_${APPLICATION_NAME}})
+endif()
+
+###############################################################################################
+# Unit tests
+###############################################################################################
+if(BUILD_TESTING)
+    add_subdirectory(gis/trk/surface/test)
 endif()

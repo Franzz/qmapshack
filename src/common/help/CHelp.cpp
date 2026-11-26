@@ -18,6 +18,7 @@
 
 #include "CHelp.h"
 
+#include <QMainWindow>
 #include <QtGui>
 #include <QtHelp>
 
@@ -25,6 +26,9 @@
 #include "help/CHelpIndex.h"
 #include "help/CHelpSearch.h"
 #include "helpers/CSettings.h"
+
+/** The size of the help window the first time it opens [px]. */
+static constexpr QSize kDefaultSize(1100, 750);
 
 static bool isFileNewer(const QString& originalPath, const QString& copyPath) {
   QFileInfo originalInfo(originalPath);
@@ -83,25 +87,58 @@ CHelp::CHelp(const QString& sourceQhc, const QString& homepage, QWidget* parent)
 
   splitter->insertWidget(0, tabWidget);
 
-  CHelpBrowser* browser = new CHelpBrowser(engine, this);
+  browser = new CHelpBrowser(engine, this);
   browser->setSource(QUrl(homepage));
   splitter->insertWidget(1, browser);
 
   setWidget(splitter);
+  restoreSplitter();
+}
 
-  SETTINGS;
-  cfg.beginGroup("Help");
-  if (cfg.contains("geometry")) {
-    restoreGeometry(cfg.value("geometry").toByteArray());
-    splitter->restoreState(cfg.value("splitter").toByteArray());
-  }
-  cfg.endGroup();
+CHelp::CHelp(const QString& homepage, QWidget* parent) : QDockWidget(tr("Help"), parent) {
+  setWindowFlag(Qt::Tool, true);
+  setAttribute(Qt::WA_DeleteOnClose, true);
+
+  browser = new CHelpBrowser(nullptr, this);
+  browser->setSource(QUrl::fromLocalFile(homepage));
+  setWidget(browser);
 }
 
 CHelp::~CHelp() {
   SETTINGS;
   cfg.beginGroup("Help");
   cfg.setValue("geometry", saveGeometry());
-  cfg.setValue("splitter", splitter->saveState());
+  cfg.setValue("floating", isFloating());
+  if (splitter != nullptr) {
+    cfg.setValue("splitter", splitter->saveState());
+  }
   cfg.endGroup();
 }
+
+void CHelp::restoreSplitter() {
+  SETTINGS;
+  if (cfg.contains("Help/splitter")) {
+    splitter->restoreState(cfg.value("Help/splitter").toByteArray());
+  }
+}
+
+void CHelp::place(QMainWindow* main) {
+  SETTINGS;
+  cfg.beginGroup("Help");
+  const bool floating = cfg.value("floating", true).toBool();
+  const QByteArray& geometry = cfg.value("geometry").toByteArray();
+  cfg.endGroup();
+
+  setFloating(floating);
+  if (!floating) {
+    return;
+  }
+  if (!geometry.isEmpty() && restoreGeometry(geometry)) {
+    return;
+  }
+  // Docked, it would take the width of the dock column; the pages need room.
+  resize(kDefaultSize.boundedTo(main->size()));
+  move(main->geometry().center() - rect().center());
+}
+
+void CHelp::setPage(const QString& file) { browser->setSource(QUrl::fromLocalFile(file)); }

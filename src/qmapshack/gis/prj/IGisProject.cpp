@@ -24,6 +24,7 @@
 
 #include "CMainWindow.h"
 #include "canvas/CCanvas.h"
+#include "device/CDeviceGarminArchiveMtp.h"
 #include "device/CDeviceGarminMtp.h"
 #include "device/CDeviceGenericMtp.h"
 #include "device/IDevice.h"
@@ -99,7 +100,9 @@ IGisProject::IGisProject(type_e type, const QString& filename, IDevice* parent)
 }
 
 IGisProject::~IGisProject() {
-  if (threadLoadPoject != nullptr) {
+  if (threadLoadPoject != nullptr && !threadLoadPoject->isFinished()) {
+    // This must not happen. destroyLater() waits for the thread to finish. Deleting
+    // the project behind destroyLater()'s back is the only way to get here.
     qWarning() << getName() << "threadLoadPoject is still active!";
     threadLoadPoject->requestInterruption();
   }
@@ -110,21 +113,35 @@ IGisProject::~IGisProject() {
 }
 
 void IGisProject::destroyLater() {
-  QMutexLocker lock(&IGisItem::mutexItems);
-  if (threadLoadPoject != nullptr) {
-    threadLoadPoject->requestInterruption();
+  {
+    QMutexLocker lock(&IGisItem::mutexItems);
+    if (threadLoadPoject != nullptr) {
+      threadLoadPoject->requestInterruption();
+    }
   }
-  QMetaObject::invokeMethod(
-      &CGisWorkspace::self(),
-      [this]() {
-        {
-          QMutexLocker lock(&IGisItem::mutexItems);
-          delete this;
-        }
-        // The project's items are gone only now. Redraw so they leave the map.
-        CCanvas::triggerCompleteUpdate(CCanvas::eRedrawGis);
-      },
-      Qt::QueuedConnection);
+  QMetaObject::invokeMethod(&CGisWorkspace::self(), [this]() { destroyNow(); }, Qt::QueuedConnection);
+}
+
+void IGisProject::destroyNow() {
+  // [Issue #1268] The load thread reads members of this project and schedules calls into
+  // the main thread passing the project. Deleting the project while that thread is still
+  // running leaves it with a dangling pointer. Thus the thread has to finish first.
+  //
+  // The main thread must not block while waiting for it. The load thread uses
+  // Qt::BlockingQueuedConnection and depends on the main thread's event loop to return
+  // from a pending call. Therefore poll instead of calling QThread::wait().
+  if (threadLoadPoject != nullptr && !threadLoadPoject->isFinished()) {
+    threadLoadPoject->requestInterruption();
+    QTimer::singleShot(50, &CGisWorkspace::self(), [this]() { destroyNow(); });
+    return;
+  }
+
+  {
+    QMutexLocker lock(&IGisItem::mutexItems);
+    delete this;
+  }
+  // The project's items are gone only now. Redraw so they leave the map.
+  CCanvas::triggerCompleteUpdate(CCanvas::eRedrawGis);
 }
 
 IGisProject* IGisProject::create(const QString filename, CGisListWks* parent) {
@@ -787,15 +804,20 @@ void IGisProject::umount() {
 }
 
 bool IGisProject::remove() {
-#ifdef Q_OS_LINUX
+#if defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
   CDeviceGarminMtp* mtpGarmin = dynamic_cast<CDeviceGarminMtp*>(parent());
   if (mtpGarmin != nullptr) {
     return mtpGarmin->removeFromDevice(filename);
-  } else {
-    CDeviceGenericMtp* mtpGeneric = dynamic_cast<CDeviceGenericMtp*>(parent());
-    if (mtpGeneric != nullptr) {
-      return mtpGeneric->removeFromDevice(filename);
-    }
+  }
+  CDeviceGarminArchiveMtp* mtpGarminArchive = dynamic_cast<CDeviceGarminArchiveMtp*>(parent());
+  if (mtpGarminArchive != nullptr) {
+    return mtpGarminArchive->removeFromDevice(filename);
+  }
+#endif
+#ifdef Q_OS_LINUX
+  CDeviceGenericMtp* mtpGeneric = dynamic_cast<CDeviceGenericMtp*>(parent());
+  if (mtpGeneric != nullptr) {
+    return mtpGeneric->removeFromDevice(filename);
   }
 #endif
 

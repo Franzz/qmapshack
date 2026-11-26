@@ -19,12 +19,16 @@
 #include <QNetworkProxyFactory>
 #include <QtPlugin>
 #include <QtWidgets>
+#include <memory>
+#include <optional>
 
 #include "CMainWindow.h"
 #include "CSingleInstanceProxy.h"
+#include "help/CHelpBrowser.h"
 #include "helpers/CSettings.h"
 #include "setup/CAppOpts.h"
 #include "setup/IAppSetup.h"
+#include "shoot/CShotEntry.h"
 #include "theme/CQmsStyle.h"
 #include "theme/CUiTheme.h"
 #include "version.h"
@@ -33,6 +37,10 @@
 Q_IMPORT_PLUGIN(CSvgtIconEnginePlugin)
 
 int main(int argc, char** argv) {
+  IAppSetup::exportLocaleEnv(argc, argv);
+  IAppSetup* env = IAppSetup::getPlatformInstance();
+  env->exportStyleEnv();
+
   // preserve "original" argument list
   int argCnt = argc;
   char** argVal = new char*[argCnt];
@@ -40,7 +48,12 @@ int main(int argc, char** argv) {
     argVal[i] = argv[i];
   }
 
-  QApplication app(argc, argv);
+  // Before QApplication: it reads QT_QPA_PLATFORMTHEME, and its fatals must reach a console.
+  CShotEntry::pinEnvironment(argc, argv);
+  CHelpBrowser::registerUrlScheme();
+
+  // A documentation run needs its own QApplication subclass.
+  const std::unique_ptr<QApplication> app = CShotEntry::createApplication(argc, argv);
   CQmsStyle::install();
   CUiTheme::installThemeRefresh();
 
@@ -51,9 +64,10 @@ int main(int argc, char** argv) {
   QCoreApplication::setAttribute(Qt::AA_DontShowIconsInMenus, false);
   QCoreApplication::setAttribute(Qt::AA_DontShowShortcutsInContextMenus, false);
 
-  IAppSetup* env = IAppSetup::getPlatformInstance();
   env->processArguments();
   env->initLogHandler();
+  // After the log handler, so a wrong value is logged.
+  CUiTheme::pinColorSchemeOption(qlOpts->colorscheme);
 
   // useful debug info
   {
@@ -76,11 +90,20 @@ int main(int argc, char** argv) {
   // setup default proxy
   QNetworkProxyFactory::setUseSystemConfiguration(true);
 
-  // make sure this is the one and only instance on the system
-  CSingleInstanceProxy s(qlOpts->arguments);
+  // Before CMainWindow, which reads the cache root and opens the workspace database.
+  const bool documentation = CShotEntry::isDocRun(*qlOpts);
+  if (!CShotEntry::prepare(*qlOpts)) {
+    return 1;
+  }
+
+  // The proxy hands the arguments to a running QMapShack and exits; it must outlive the window.
+  std::optional<CSingleInstanceProxy> singleInstance;
+  if (!documentation) {
+    singleInstance.emplace(qlOpts->arguments);
+  }
 
   QPointer<QSplashScreen> splash = nullptr;
-  if (!qlOpts->nosplash) {
+  if (!qlOpts->nosplash && !documentation) {
     QPixmap pic(":/pics/splash.png");
     QPainter p(&pic);
     QFont f = p.font();
@@ -102,7 +125,13 @@ int main(int argc, char** argv) {
   }
 
   CMainWindow w;
-  w.show();
+  if (CShotEntry::showsMainWindow(*qlOpts)) {
+    w.show();
+  }
+
+  if (const std::optional<qint32>& code = CShotEntry::run(*qlOpts, w); code.has_value()) {
+    return code.value();
+  }
 
   if (nullptr != splash) {
     QTimer::singleShot(1500, splash, [splash, &w]() {
@@ -113,5 +142,5 @@ int main(int argc, char** argv) {
     });
   }
 
-  return app.exec();
+  return app->exec();
 }

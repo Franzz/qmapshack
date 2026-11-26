@@ -24,14 +24,12 @@
 #include "realtime/CRtDraw.h"
 #include "realtime/CRtSelectSource.h"
 #include "realtime/IRtSource.h"
-#include "svgticon/CSvgtIcon.h"
 
 CRtWorkspace* CRtWorkspace::pSelf = nullptr;
 
 CRtWorkspace::CRtWorkspace(QWidget* parent) : QWidget(parent) {
   pSelf = this;
   setupUi(this);
-  CSvgtIcon::load(label_2, "://icons/Help.svgt");
   connect(this, &CRtWorkspace::sigChanged, this, &CRtWorkspace::slotChanged);
 
   menu = new QMenu(treeWidget);
@@ -42,6 +40,7 @@ CRtWorkspace::CRtWorkspace(QWidget* parent) : QWidget(parent) {
   connect(treeWidget, &QTreeWidget::customContextMenuRequested, this, &CRtWorkspace::slotContextMenu);
   connect(treeWidget, &QTreeWidget::itemClicked, this, &CRtWorkspace::slotItemClicked);
   connect(actionAddSource, &QAction::triggered, this, &CRtWorkspace::slotAddSource);
+  connect(labelHelp, &QLabel::linkActivated, this, &CRtWorkspace::slotAddSource);
   connect(actionDeleteSource, &QAction::triggered, this, &CRtWorkspace::slotDeleteSource);
 
   SETTINGS;
@@ -63,7 +62,8 @@ CRtWorkspace::CRtWorkspace(QWidget* parent) : QWidget(parent) {
 
   cfg.endGroup();
 
-  labelHelp->setText(tr("To add a realtime source do a right click on the list above. "));
+  labelHelp->setText(
+      tr("To add a realtime source do a right click on the list above and choose <a href='AddSource'>Add Source</a>."));
   slotChanged();
 }
 

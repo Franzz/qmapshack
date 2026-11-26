@@ -24,7 +24,6 @@
 #include "dem/CDemDraw.h"
 #include "dem/CDemItem.h"
 #include "map/CMapItemDelegate.h"
-#include "svgticon/CSvgtIcon.h"
 
 CDemTreeWidget::CDemTreeWidget(QWidget* parent) : QTreeWidget(parent) {
   CMapItemDelegate* delegate = new CMapItemDelegate(this);
@@ -100,7 +99,6 @@ void CDemTreeWidget::dropEvent(QDropEvent* e) {
 
 CDemList::CDemList(CCanvas* parent) : QWidget(parent), canvas(parent) {
   setupUi(this);
-  CSvgtIcon::load(labelIcon, "://icons/Help.svgt");
   lineFilter->addAction(actionClearFilter, QLineEdit::TrailingPosition);
 
   connect(treeWidget, &CDemTreeWidget::customContextMenuRequested, this, &CDemList::slotContextMenu);
@@ -114,7 +112,6 @@ CDemList::CDemList(CCanvas* parent) : QWidget(parent), canvas(parent) {
   connect(actionMoveDown, &QAction::triggered, this, &CDemList::slotMoveDown);
   connect(actionMoveEnd, &QAction::triggered, this, &CDemList::slotMoveEnd);
   connect(actionRemove, &QAction::triggered, this, &CDemList::slotRemove);
-  connect(actionReloadDem, &QAction::triggered, this, &CDemList::slotReloadDem);
   connect(actionOverviewInfo, &QAction::triggered, this, &CDemList::slotOverviewInfo);
   connect(labelHelpFillMapList, &QLabel::linkActivated, &CMainWindow::self(),
           static_cast<void (CMainWindow::*)(const QString&)>(&CMainWindow::slotLinkActivated));
@@ -130,7 +127,6 @@ CDemList::CDemList(CCanvas* parent) : QWidget(parent), canvas(parent) {
   menu->addSeparator();
   menu->addAction(actionOverviewInfo);
   menu->addSeparator();
-  menu->addAction(actionReloadDem);
   menu->addAction(CMainWindow::self().getDemSetupAction());
   menu->setToolTipsVisible(true);
 }
@@ -177,7 +173,7 @@ void CDemList::updateHelpText() {
   labelHelpFillMapList->setVisible(!haveMaps);
 
   if (!haveMaps) {
-    labelIcon->show();
+    helpBlock->show();
     labelHelpActivateMap->hide();
   } else {
     bool showHelp = true;
@@ -192,7 +188,7 @@ void CDemList::updateHelpText() {
         showHelp = false;
       }
     }
-    labelIcon->setVisible(showHelp);
+    helpBlock->setVisible(showHelp);
     labelHelpActivateMap->setVisible(showHelp);
   }
 }
@@ -296,12 +292,11 @@ void CDemList::slotOverviewInfo() {
   }
 }
 
-void CDemList::slotReloadDem() {
+void CDemList::resetDelegate() {
   CMapItemDelegate* delegate = dynamic_cast<CMapItemDelegate*>(treeWidget->itemDelegate());
   if (delegate != nullptr) {
     delegate->reset();
   }
-  CDemDraw::setupDemPath(CDemDraw::getDemPaths());
 }
 
 void CDemList::slotFilter(const QString& str) {

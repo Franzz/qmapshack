@@ -1,3 +1,42 @@
+V1.XX.X
+
+V1.22.0
+[QMS-1217] Documentation mode: take the manual's pictures from QMapShack itself
+[QMS-1218] Use QWebEngineView instead of QTextBrowser to render the offline help
+[QMS-1231] Fix: Overlay lines of Garmin maps, like cycle routes, are hidden at some zoom levels
+[QMS-1242] Fix: Qt's strings are translated for languages QMapShack is not translated to
+[QMS-1243] Fix: Windows build breaks when clang-format sorts the Win32 includes
+[QMS-1244] Document all command line options in the man pages
+[QMS-1261] Display hours always as two digits in log output
+[QMS-1263] Folder msvc_64 maintenance
+[QMS-1268] Fix: Crash when opening a copy of a QMS project
+[QMS-1269] Use Qt style Fusion by default on macOS and Windows
+[QMS-1274] Pass QMS look-and-feel to internally called QMT
+[QMS-1276] macOS build scripts maintenance
+[QMS-1278] More macOS build scripts maintenance
+[QMS-1280] Show surfaces and way types of tracks from OpenStreetMap data
+[QMS-1281] Support Mapsforge POI files of version 3 and 4
+[QMS-1284] Access Garmin MTP devices natively on macOS
+[QMS-1286] Fix: POIs stay missing after a failed read of a Mapsforge POI file
+[QMS-1289] Include standalone tool qms_surfacedb into QMapShack.app on macOS
+[QMS-1291] Fix: CMake problem with the dev version on Arch Linux
+[QMS-1293] Force color mode light or dark from command line
+[QMS-1295] Fix: Deleting a project in the Archive of a Garmin MTP device does not remove it from the device
+[QMS-1296] Fix: Crash when a MTP device is unplugged or QMapShack quits while the device's projects are loading
+[QMS-1297] Translate "surface" dialogs into German
+[QMS-1299] Fix: Compiler warnings due to "-framework IOkit" compiler option on macOS
+[QMS-1307] Fix: Cloning an item a second time when importing into a database fails with a duplicate key
+[QMS-1314] Fix: Surface database is "unusable": database is locked
+[QMS-1317] Offline help: generate it with Sphinx from Markdown pages in this repository
+[QMS-1319] Documentation images: marks on controls that survive retaking
+[QMS-1322] Documentation: a new quick start guide with images from the shot tool
+[QMS-1324] Watch the map, DEM, POI, Routino and surface database folders for new files
+[QMS-1330] Nicer help blocks and Quick Start in the offline help
+[QMS-1334] Fix: Coordinates show 60 seconds or 60 minutes instead of carrying over
+[QMS-1337] Complete the Spanish and Italian translation of the interface and the manual
+[QMS-1341] Garmin maps: readable street names along roads
+
+
 V1.21.1
 [QMS-1212] Update macOS build scripts
 [QMS-1215] Support MBTiles maps via GDAL's VRT driver on macOS

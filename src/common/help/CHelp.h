@@ -20,7 +20,9 @@
 #define CHELP_H
 
 #include <QDockWidget>
+class CHelpBrowser;
 class QHelpEngine;
+class QMainWindow;
 class QSplitter;
 class QTabWidget;
 class CHelpIndex;
@@ -29,15 +31,31 @@ class CHelpSearch;
 class CHelp : public QDockWidget {
   Q_OBJECT
  public:
+  /** @brief Help from a compressed Qt help collection, with content, index and search panes. */
   CHelp(const QString& helpfile, const QString& homepage, QWidget* parent);
+  /** @brief Help from a generated HTML tree, which brings its own navigation, index and search. */
+  CHelp(const QString& homepage, QWidget* parent);
   virtual ~CHelp();
 
+  /**
+     @brief Show it where it was when last closed, docked or floating; the first time floating, centred over @p main.
+
+     Call after QMainWindow::addDockWidget(): docked, the help takes the width of its dock column.
+   */
+  void place(QMainWindow* main);
+
+  /** @brief Show the generated HTML page @p file. */
+  void setPage(const QString& file);
+
  private:
-  QHelpEngine* engine;
-  QTabWidget* tabWidget;
-  QSplitter* splitter;
-  CHelpIndex* index;
-  CHelpSearch* search;
+  void restoreSplitter();
+
+  QHelpEngine* engine = nullptr;
+  QTabWidget* tabWidget = nullptr;
+  QSplitter* splitter = nullptr;
+  CHelpBrowser* browser = nullptr;
+  CHelpIndex* index = nullptr;
+  CHelpSearch* search = nullptr;
 };
 
 #endif  // CHELP_H

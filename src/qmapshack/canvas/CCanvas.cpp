@@ -329,8 +329,7 @@ void CCanvas::buildHelpText() {
       "<p>A map must always be defined by a single file that is recognized by QMapShack. This file has to be placed "
       "into one "
       "of the registered map folders (<a href='MapFolders'>File->Setup Map Paths</a>). QMapShack will find it and list "
-      "it. You can reload the list of maps by doing a right click on the map list and select 'Reload Maps' from the "
-      "menu.</p> "
+      "it within a few seconds.</p> "
       "<p>A map must be activated to be visible. Right click on the map entry and select 'Activate' from the menu. The "
       "moment a map "
       "is activated this help will disappear. To see it again you simply add another map view "
@@ -378,9 +377,7 @@ void CCanvas::buildHelpText() {
          "that is recognized by "
          "QMapShack. This file has to be placed into one of the registered DEM folders (<a "
          "href='DemFolders'>File->Setup DEM Paths</a>). "
-         "QMapShack will find it and list it. You can reload the list of DEM files by doing a right click on the DEM "
-         "list and select "
-         "'Reload DEM' from the menu.</p>"
+         "QMapShack will find it and list it within a few seconds.</p>"
          "<p>Similar to raster maps DEM files have to be wrapped by a *.vrt file to be recognized. A *.vrt file can "
          "reference one "
          "or several other files. Again, you can use QMapShack's built-in VRT Builder (<a href='VrtBuilder'>Tool->VRT "
@@ -940,15 +937,13 @@ CVrtAdvisoryDialog* CCanvas::showOverviewAdvisory(QPointer<T> source) {
 
 void CCanvas::slotShowDemOverviewAdvisory(QPointer<CDemVRT> source) {
   if (auto* dlg = showOverviewAdvisory(source)) {
-    connect(dlg, &CVrtAdvisoryDialog::sigContainerRebuilt, this,
-            []() { CDemDraw::setupDemPath(CDemDraw::getDemPaths()); });
+    connect(dlg, &CVrtAdvisoryDialog::sigContainerRebuilt, this, &CDemDraw::reloadDems);
   }
 }
 
 void CCanvas::slotShowMapOverviewAdvisory(QPointer<CMapVRT> source) {
   if (auto* dlg = showOverviewAdvisory(source)) {
-    connect(dlg, &CVrtAdvisoryDialog::sigContainerRebuilt, this,
-            []() { CMapDraw::setupMapPath(CMapDraw::getMapPaths()); });
+    connect(dlg, &CVrtAdvisoryDialog::sigContainerRebuilt, this, &CMapDraw::reloadMaps);
   }
 }
 
@@ -980,7 +975,7 @@ void CCanvas::slotCheckTrackOnFocus() {
     // track profile visibility is set in slotUpdateTrackInfo()
 
     colorLegend = new CColorLegend(this, trk2);
-    colorLegend->setGeometry(20, 20, 40, 300);
+    colorLegend->move(20, 20);
 
     // finally store the new key as track on focus
     keyTrackOnFocus = key;
@@ -1206,6 +1201,8 @@ void CCanvas::zoom(int index) {
   slotTriggerCompleteUpdate(eRedrawAll);
 }
 
+int CCanvas::getZoomIndex() const { return map->zoom(); }
+
 bool CCanvas::findPolylineCloseBy(const QPointF& pt1, const QPointF& pt2, qint32 threshold, QPolygonF& polyline) {
   return map->findPolylineCloseBy(pt1, pt2, threshold, polyline);
 }
@@ -1331,6 +1328,22 @@ void CCanvas::waitForDrawContexts() {
     context->wait();
   }
 }
+
+bool CCanvas::isDrawComplete() const {
+  // A viewport a running draw refused is still pending on timerViewport.
+  if (eRedrawNone != needsRedraw || !drawContextViewportIsCurrent()) {
+    return false;
+  }
+  for (IDrawContext* context : std::as_const(allDrawContext)) {
+    if (context->isRunning() || context->needsRedraw()) {
+      return false;
+    }
+  }
+  // Only once idle: CMapDraw::drawt() holds the map list mutex.
+  return 0 == map->pendingTiles();
+}
+
+qint32 CCanvas::failedTiles() const { return map->failedTiles(); }
 
 void CCanvas::print(QPainter& p, const QRectF& area, const QPointF& focus, bool printScale) {
   const QSize newSize(area.size().toSize());

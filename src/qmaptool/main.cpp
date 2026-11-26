@@ -22,6 +22,7 @@
 
 #include "CMainWindow.h"
 #include "CSingleInstanceProxy.h"
+#include "help/CHelpBrowser.h"
 #include "helpers/CSettings.h"
 #include "setup/IAppSetup.h"
 #include "theme/CQmsStyle.h"
@@ -32,6 +33,11 @@
 Q_IMPORT_PLUGIN(CSvgtIconEnginePlugin)
 
 int main(int argc, char** argv) {
+  IAppSetup::exportLocaleEnv(argc, argv);
+  // created before QApplication to export the style, adopted by it below
+  IAppSetup& env = IAppSetup::createInstance(nullptr);
+  env.exportStyleEnv();
+
   // preserve "original" argument list
   int argCnt = argc;
   char** argVal = new char*[argCnt];
@@ -39,6 +45,7 @@ int main(int argc, char** argv) {
     argVal[i] = argv[i];
   }
 
+  CHelpBrowser::registerUrlScheme();
   QApplication app(argc, argv);
   CQmsStyle::install();
   CUiTheme::installThemeRefresh();
@@ -50,9 +57,11 @@ int main(int argc, char** argv) {
   QCoreApplication::setAttribute(Qt::AA_DontShowIconsInMenus, false);
   QCoreApplication::setAttribute(Qt::AA_DontShowShortcutsInContextMenus, false);
 
-  IAppSetup& env = IAppSetup::createInstance(qApp);
+  env.setParent(&app);
   env.processArguments();
   env.initLogHandler();
+  // After the log handler, so a wrong value is logged.
+  CUiTheme::pinColorSchemeOption(qlOpts->colorscheme);
 
   // useful debug info
   {

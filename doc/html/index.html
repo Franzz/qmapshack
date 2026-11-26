@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>QMapShack documentation</title>
+<script>
+var built = ["de", "en", "es", "it"];
+var wanted = navigator.languages || [navigator.language || ""];
+var pick = "en";
+for (var i = 0; i < wanted.length; i++) {
+  var lang = wanted[i].toLowerCase().split("-")[0];
+  if (built.indexOf(lang) >= 0) {
+    pick = lang;
+    break;
+  }
+}
+location.replace(pick + "/index.html" + location.hash);
+</script>
+<noscript><meta http-equiv="refresh" content="0; url=en/index.html"></noscript>
+</head>
+<body></body>
+</html>
